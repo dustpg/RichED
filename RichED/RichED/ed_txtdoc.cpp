@@ -243,12 +243,6 @@ namespace RichED { namespace impl {
         //mode_leftword,      // 左移字段
         //mode_rightword,     // 右移字段
     };
-    // selection flag
-    enum selection_flag : uint32_t {
-        // 简单说就是按住SHIFT
-        flag_keepanchor_i = 16,
-        flag_keepanchor = 1 << flag_keepanchor_i,
-    };
 }}
 
 
@@ -261,8 +255,21 @@ namespace RichED {
         LogicLine   line2;
         LogicLine*  line1;
     };
+    // hittest
+    struct HitTestCtx {
+        // visual line
+        const VisualLine*   visual_line;
+        // text cell
+        CEDTextCell*        text_cell;
+        // pos: before cell
+        uint32_t            len_before_cell;
+        // pos: in cell
+        uint32_t            len_in_cell;
+    };
     // priavate impl for CEDTextDocument
     struct CEDTextDocument::Private {
+        // hit doc from position
+        static bool HitTest(CEDTextDocument& doc, Point, HitTestCtx&) noexcept;
         // check range
         static bool CheckRange(CEDTextDocument& doc, DocPoint begin, DocPoint end, CheckRangeCtx& ctx) noexcept;
         // check wrap mode
@@ -272,7 +279,7 @@ namespace RichED {
         // recreate cell
         static void Recreate(CEDTextDocument&doc, CEDTextCell& cell) noexcept;
         // set selection
-        static void SetSelection(CEDTextDocument& doc, DocPoint dp, uint32_t mode) noexcept;
+        static void SetSelection(CEDTextDocument& doc, DocPoint dp, uint32_t mode, bool ) noexcept;
         // insert text
         static bool Insert(CEDTextDocument& doc, DocPoint dp, U16View, LogicLine, bool behind)noexcept;
         // insert cell
@@ -583,6 +590,85 @@ void RichED::CEDTextDocument::VAlignHelperH(unit_t ar, unit_t height, CellMetric
 }
 
 // ----------------------------------------------------------------------------
+//                                GUI Operation
+// ----------------------------------------------------------------------------
+
+/// <summary>
+/// GUIs the l button up.
+/// </summary>
+/// <param name="pt">The pt.</param>
+/// <returns></returns>
+bool RichED::CEDTextDocument::GuiLButtonUp(Point pt) noexcept {
+    HitTestCtx ctx;
+    if (Private::HitTest(*this, pt, ctx)) {
+        const DocPoint dp{
+            ctx.visual_line->lineno, 
+            ctx.len_before_cell + ctx.len_in_cell
+        };
+        Private::SetSelection(*this, dp, impl::mode_target, false);
+        return true;
+    }
+    return false;
+}
+
+/// <summary>
+/// GUIs the l button down.
+/// </summary>
+/// <param name="pt">The pt.</param>
+/// <param name="shift">if set to <c>true</c> [shift].</param>
+/// <returns></returns>
+bool RichED::CEDTextDocument::GuiLButtonDown(Point pt, bool shift) noexcept {
+    return true;
+}
+
+/// <summary>
+/// GUIs the l button hold.
+/// </summary>
+/// <param name="pt">The pt.</param>
+/// <returns></returns>
+bool RichED::CEDTextDocument::GuiLButtonHold(Point pt) noexcept {
+    return true;
+}
+
+/// <summary>
+/// GUI: the character.
+/// </summary>
+/// <param name="ch">The ch.</param>
+/// <returns></returns>
+bool RichED::CEDTextDocument::GuiChar(char32_t ch) noexcept {
+    char16_t buf[2];
+    const auto len = detail::utf32to16(ch, buf);
+    return this->GuiText({ buf, buf + len });
+}
+
+
+/// <summary>
+/// GUIs the text.
+/// </summary>
+/// <param name="view">The view.</param>
+/// <returns></returns>
+bool RichED::CEDTextDocument::GuiText(U16View view) noexcept {
+    // 只读
+    if (m_info.flags & Flag_GuiReadOnly) return false;
+    
+    assert(!"NOT IMPL");
+    return false;
+}
+
+/// <summary>
+/// GUIs the return.
+/// </summary>
+/// <returns></returns>
+bool RichED::CEDTextDocument::GuiReturn() noexcept {
+    // 单行
+    if (m_info.flags & Flag_MultiLine) {
+        const char16_t line_feed[1] = { '\n' };
+        return this->GuiText({ line_feed, line_feed + 1 });
+    }
+    return false;
+}
+
+// ----------------------------------------------------------------------------
 //                                Set RichText Format
 // ----------------------------------------------------------------------------
 
@@ -758,6 +844,7 @@ void RichED::CEDTextDocument::Private::ExpandVL(
     vlv.Resize(count);
     line.ar_height_max = line.dr_height_max = 0;
     unit_t offset_inline = 0;
+    uint32_t char_length_vl = 0;
     //uintptr_t new_line = 0;
     // 起点为无效起点
     while (cell != &end) {
@@ -775,6 +862,7 @@ void RichED::CEDTextDocument::Private::ExpandVL(
             cell->MergeWithNext();
 
         bool new_line = cell->GetMetaInfo().eol;
+        //
 
         // 重建脏CELL
         Private::Recreate(doc, *cell);
@@ -793,6 +881,9 @@ void RichED::CEDTextDocument::Private::ExpandVL(
                 // 换行
                 if (!detail::push_data(vlv, line)) return;
                 cell->metrics.pos = 0;
+                // 这里换行不是逻辑
+                line.char_len_before += char_length_vl;
+                char_length_vl = 0;
                 offset_inline = 0;
                 // 行偏移 = 上一行偏移 + 上一行最大升高 + 上一行最大降高
                 line.first = cell;
@@ -812,16 +903,21 @@ void RichED::CEDTextDocument::Private::ExpandVL(
         // --------------------- EOVL
         // --------------------------
 
+
         // 行内偏移
         cell->metrics.pos = offset_inline;
         offset_inline += cell->metrics.width;
+        char_length_vl += cell->GetString().length;
         // 行内升部降部最大信息
         line.ar_height_max = std::max(cell->metrics.ar_height, line.ar_height_max);
         line.dr_height_max = std::max(cell->metrics.dr_height, line.dr_height_max);
         // 换行
         if (new_line) {
             if (!detail::push_data(vlv, line)) return;
+            line.char_len_before += char_length_vl;
+            char_length_vl = 0;
             line.lineno += cell->GetMetaInfo().eol;
+            if (cell->GetMetaInfo().eol) line.char_len_before = 0;
             line.first = detail::next_cell(cell);
             // 行偏移 = 上一行偏移 + 上一行最大升高 + 上一行最大降高
             line.offset += line.ar_height_max + line.dr_height_max;
@@ -996,12 +1092,16 @@ auto RichED::CEDTextDocument::Private::CheckWrap(
 /// Sets the selection.
 /// </summary>
 /// <param name="doc">The document.</param>
+/// <param name="point">The point.</param>
 /// <param name="mode">The mode.</param>
+/// <param name="keepanchor">if set to <c>true</c> [keepanchor].</param>
 /// <returns></returns>
-void RichED::CEDTextDocument::Private::SetSelection(CEDTextDocument& doc, DocPoint point, uint32_t mode) noexcept {
+void RichED::CEDTextDocument::Private::SetSelection(
+    CEDTextDocument& doc, DocPoint point, 
+    uint32_t mode, bool keepanchor) noexcept {
     const auto prev_caret = doc.m_dpCaret;
     // 设置选择区
-    switch (mode & 0xffff)
+    switch (mode)
     {
         uint32_t i;
     case impl::mode_all:
@@ -1431,4 +1531,58 @@ bool RichED::CEDTextDocument::Private::CheckRange(
         }
     }
     return false;
+}
+
+
+/// <summary>
+/// Hits the test.
+/// </summary>
+/// <param name="doc">The document.</param>
+/// <param name="pos">The position.</param>
+/// <param name="ctx">The CTX.</param>
+/// <returns></returns>
+bool RichED::CEDTextDocument::Private::HitTest(
+    CEDTextDocument & doc, Point pos, HitTestCtx& ctx) noexcept {
+    // 数据无效
+    auto& vlv = doc.m_vVisual;
+    // 最后一行是无效数据
+    if (vlv.GetSize() < 2) return false;
+    // TODO: 固定行高模式
+    if (doc.m_info.flags & Flag_FixedLineHeight) {
+        assert(!"NOT IMPL");
+        return false;
+    }
+    // 二分查找到指定视觉行
+    
+    const auto cmp = [](unit_t ll, const VisualLine& vl) noexcept { return  ll < vl.offset; };
+    const auto itr = std::upper_bound(vlv.begin(), vlv.end(), pos.y, cmp);
+    // 正常情况下, itr指向的是下一行. 比如: [0, 20, 40]中, 输入10输出指向20
+    int offset = -1;
+    // 太高的话算第一行
+    if (itr == vlv.begin()) offset = 0;
+    // 太低的话算倒数第二行(最后一行是END-CELL)
+    else if (itr == vlv.end()) offset = -2;
+    // 获取指定信息
+    const auto& line0 = itr[offset];
+    ctx.visual_line = &line0;
+    uint32_t char_offset_in_line = line0.char_len_before;
+    const auto& line1 = itr[offset + 1];
+    unit_t offthis = pos.x;
+    const auto cfor = detail::cfor_cells(line0.first, line1.first);
+    auto target = static_cast<CEDTextCell*>(line1.first->prev);
+    // 遍历到指定位置
+    for (auto& cell : cfor) {
+        if (offthis < cell.metrics.width) {
+            target = &cell;
+            break;
+        }
+        char_offset_in_line += cell.GetString().length;
+        offthis -= cell.metrics.width;
+    }
+    // 进行点击测试
+    const auto ht = doc.platform.HitTest(*target, offthis);
+    ctx.text_cell = target;
+    ctx.len_before_cell = char_offset_in_line;
+    ctx.len_in_cell = ht.pos + ht.trailing * ht.length;
+    return true;
 }

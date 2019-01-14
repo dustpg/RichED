@@ -6,6 +6,7 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#include <minwindef.h>
 #include <d2d1_1.h>
 #include <dwrite_1.h>
 #pragma comment(lib, "d2d1.lib")
@@ -81,9 +82,7 @@ struct DWnD2DDataField {
 struct WinDWnD2D final : IEDTextPlatform {
     // ctor
     WinDWnD2D() noexcept {}
-    // error beep
-    void ErrorBeep() noexcept override { ::MessageBeep(MB_ICONERROR); }
-    // on out of memory, won't be called on Doc's ctor
+    // on out of memory, won't be called on ctor
     auto OnOOM(uint32_t retry_count) noexcept->HandleOOM override { std::exit(ECODE_OOM); return OOM_NoReturn; }
     // value changed
     void ValueChanged(Changed) noexcept override;
@@ -290,14 +289,14 @@ bool WinDWnD2D::Init(HWND hwnd) noexcept {
             &d.d2d_rendertarget
         );
     }
-    //if (SUCCEEDED(hr)) {
-    //    void* ptr = nullptr;
-    //    d.d2d_rendertarget->QueryInterface(IID_ID2D1DeviceContext, &ptr);
-    //    if (const auto obj = static_cast<ID2D1DeviceContext*>(ptr)) {
-    //        obj->SetUnitMode(D2D1_UNIT_MODE_PIXELS);
-    //        obj->Release();
-    //    }
-    //}
+    if (SUCCEEDED(hr)) {
+        void* ptr = nullptr;
+        d.d2d_rendertarget->QueryInterface(IID_ID2D1DeviceContext, &ptr);
+        if (const auto obj = static_cast<ID2D1DeviceContext*>(ptr)) {
+            obj->SetUnitMode(D2D1_UNIT_MODE_PIXELS);
+            obj->Release();
+        }
+    }
     if (SUCCEEDED(hr)) {
         hr = d.d2d_rendertarget->CreateSolidColorBrush(
             D2D1::ColorF(D2D1::ColorF::Black),
@@ -344,6 +343,7 @@ LRESULT WinDWnD2D::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
     LRESULT result = 0;
     switch (message)
     {
+        int16_t x, y;
         PAINTSTRUCT ps;
     case WM_SIZE:
         g_platform.Resize(LOWORD(lParam), HIWORD(lParam));
@@ -361,6 +361,20 @@ LRESULT WinDWnD2D::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
     case WM_TIMER:
         g_platform.caret_blibk_i ^= 1;
         ::InvalidateRect(hwnd, nullptr, false);
+        break;
+    case WM_LBUTTONDOWN:
+        x = int16_t(LOWORD(lParam)) - CTRL_X;
+        y = int16_t(HIWORD(lParam)) - CTRL_Y;
+        if (x >= 0 && y >= 0 && x < int16_t(ctrl_w) && y < int16_t(ctrl_h)) {
+            g_platform.Doc().GuiLButtonDown({ (float)x, (float)y }, !!(wParam & MK_SHIFT));
+        }
+        break;
+    case WM_LBUTTONUP:
+        x = int16_t(LOWORD(lParam)) - CTRL_X;
+        y = int16_t(HIWORD(lParam)) - CTRL_Y;
+        if (x >= 0 && y >= 0 && x < int16_t(ctrl_w) && y < int16_t(ctrl_h)) {
+            g_platform.Doc().GuiLButtonUp({ (float)x, (float)y });
+        }
         break;
     case WM_KEYDOWN:
         handled = true;

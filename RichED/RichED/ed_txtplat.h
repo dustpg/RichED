@@ -48,9 +48,7 @@ namespace RichED {
             // estimated height changed
             Changed_EstimatedHeight,
         };
-        // error beep
-        virtual void ErrorBeep() noexcept = 0;
-        // on out of memory, won't be called on Doc's ctor
+        // on out of memory, won't be called on ctor
         virtual auto OnOOM(uint32_t retry_count) noexcept ->HandleOOM = 0;
         // value changed
         virtual void ValueChanged(Changed) noexcept = 0;

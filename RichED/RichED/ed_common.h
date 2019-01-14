@@ -89,8 +89,8 @@ namespace RichED {
         Flag_FixedLineHeight = 1 << 0,
         // rich text
         Flag_RichText = 1 << 1,
-        // read only
-        Flag_ReadOnly = 1 << 2,
+        // gui-level read only
+        Flag_GuiReadOnly = 1 << 2,
         // multi line
         Flag_MultiLine = 1 << 3,
         // password mode
