@@ -14,6 +14,7 @@
 
 // c++
 #include <string>
+#include <vector>
 
 
 
@@ -102,6 +103,8 @@ struct WinDWnD2D final : IEDTextPlatform {
     void DrawContext(CEDTextCell&, unit_t y) noexcept override;
     // hittest the cell
     auto HitTest(CEDTextCell&, unit_t offset) noexcept->CellHitTest override;
+    // cm
+    auto GetCharMetrics(CEDTextCell&, uint32_t offset) noexcept->CharMetrics override;
 #ifndef NDEBUG
     // debug output
     void DebugOutput(const char*) noexcept override;
@@ -121,9 +124,9 @@ struct WinDWnD2D final : IEDTextPlatform {
     void Render() noexcept;
 
 
-
     uint32_t        cell_draw_i = 0;
-    uint32_t        caret_blibk_i = 0;
+    uint32_t        caret_blink_i = 0;
+    uint32_t        caret_blink_time = 500;
 
     // doc
     std::aligned_storage<sizeof(CEDTextDocument), alignof(CEDTextDocument)>
@@ -183,6 +186,7 @@ int main() {
         ::ShowWindow(hwnd, SW_NORMAL);
         ::UpdateWindow(hwnd);
         const auto blink = ::GetCaretBlinkTime();
+        g_platform.caret_blink_time = blink;
         const auto id = reinterpret_cast<uintptr_t>(&g_platform);
         ::SetTimer(hwnd, id, blink, nullptr);
         MSG msg = { 0 };
@@ -343,6 +347,7 @@ LRESULT WinDWnD2D::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
     LRESULT result = 0;
     switch (message)
     {
+        bool ctrl, shift;
         int16_t x, y;
         PAINTSTRUCT ps;
     case WM_SIZE:
@@ -359,7 +364,7 @@ LRESULT WinDWnD2D::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
         result = 0;
         break;
     case WM_TIMER:
-        g_platform.caret_blibk_i ^= 1;
+        g_platform.caret_blink_i ^= 1;
         ::InvalidateRect(hwnd, nullptr, false);
         break;
     case WM_LBUTTONDOWN:
@@ -379,22 +384,24 @@ LRESULT WinDWnD2D::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
     case WM_KEYDOWN:
         handled = true;
         result = 0;
+        ctrl = (::GetKeyState(VK_CONTROL) & 0x80) != 0;
+        shift = (::GetKeyState(VK_CONTROL) & 0x80) != 0;
         switch (wParam)
         {
         default:
             handled = false;
             break;
-        case VK_RIGHT:
-            ctrl_w += 10.f;
-            //ctrl_h += 10.f;
-            g_platform.Doc().Resize({ ctrl_w, ctrl_h });
-            break;
         case VK_LEFT:
-            if (ctrl_w > 20.f) {
-                ctrl_w -= 10.f;
-                //ctrl_h -= 10.f;
-                g_platform.Doc().Resize({ ctrl_w, ctrl_h });
-            }
+            g_platform.Doc().GuiLeft(ctrl, shift);
+            break;
+        case VK_UP:
+            g_platform.Doc().GuiUp(ctrl, shift);
+            break;
+        case VK_RIGHT:
+            g_platform.Doc().GuiRight(ctrl, shift);
+            break;
+        case VK_DOWN:
+            g_platform.Doc().GuiDown(ctrl, shift);
             break;
         //case 'P':
         //    g_platform.Doc().InsertText({ 0, 1000 }, u"red \nblur"_red);
@@ -415,6 +422,18 @@ LRESULT WinDWnD2D::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
             break;
         case VK_F4:
             g_platform.Doc().SetUnerline({ 0, 4 }, { 0, 8 }, CEDTextDocument::Set_Change);
+            break;
+        case VK_F5:
+            ctrl_w += 10.f;
+            //ctrl_h += 10.f;
+            g_platform.Doc().Resize({ ctrl_w, ctrl_h });
+            break;
+        case VK_F6:
+            if (ctrl_w > 20.f) {
+                ctrl_w -= 10.f;
+                //ctrl_h -= 10.f;
+                g_platform.Doc().Resize({ ctrl_w, ctrl_h });
+            }
             break;
         }
         break;
@@ -594,7 +613,8 @@ void WinDWnD2D::ValueChanged(Changed changed) noexcept {
     case RichED::IEDTextPlatform::Changed_Selection:
         break;
     case RichED::IEDTextPlatform::Changed_Caret:
-        this->caret_blibk_i = 1;
+        ::SetTimer(data.hwnd, reinterpret_cast<uintptr_t>(this), caret_blink_time, nullptr);
+        this->caret_blink_i = 1;
         ::InvalidateRect(this->data.hwnd, nullptr, false);
         break;
     case RichED::IEDTextPlatform::Changed_Text:
@@ -627,6 +647,49 @@ auto WinDWnD2D::HitTest(CEDTextCell& cell, unit_t offset) noexcept->CellHitTest 
         rv.length = htm.length;
     }
     return rv;
+}
+
+/// <summary>
+/// Gets the character metrics.
+/// </summary>
+/// <param name="cell">The cell.</param>
+/// <param name="offset">The offset.</param>
+/// <returns></returns>
+auto WinDWnD2D::GetCharMetrics(CEDTextCell& cell, uint32_t pos) noexcept -> CharMetrics {
+    CharMetrics cm = { 0 };
+    // 睡眠状态则唤醒
+    if (!cell.ctx.context) this->RecreateContext(cell);
+    // 失败则不获取
+    if (const auto ptr = static_cast<IDWriteTextLayout*>(cell.ctx.context)) {
+        if (pos == cell.GetString().length) {
+            cm.offset = cell.metrics.width;
+        }
+        else try {
+            std::vector<DWRITE_CLUSTER_METRICS> buf;
+            const uint32_t size = pos + 1;
+            buf.resize(size);
+            uint32_t max_count = 0;
+            ptr->GetClusterMetrics(buf.data(), size, &max_count);
+            // 遍历位置
+            const auto data_ptr = buf.data();
+            const auto data_len = max_count;
+            float width = 0, last_width = 0;
+            uint32_t char_index = 0;
+            // 防止万一, 加上 [i != data_len]
+            for (uint32_t i = 0; i != data_len; ++i) {
+                const auto&x = data_ptr[i];
+                width += last_width = x.width;
+                // 防止万一用>=
+                if (char_index >= pos) break;
+                char_index += x.length;
+            }
+            // 写回返回值
+            cm.width = last_width;
+            cm.offset = width - last_width;
+        }
+        catch (...) {}
+    }
+    return cm;
 }
 
 #ifndef NDEBUG
@@ -672,13 +735,23 @@ void WinDWnD2D::Render() noexcept {
     renderer->SetTransform(D2D1::Matrix3x2F::Translation(CTRL_X, CTRL_Y));
     renderer->DrawRectangle({0, 0, ctrl_w, ctrl_h }, brush);
     this->Doc().Render();
-    if (this->caret_blibk_i) {
+    if (this->caret_blink_i) {
         const auto caret = this->Doc().GetCaret();
-        constexpr float custom_width = 2.33f;
+
+        constexpr float custom_width = 2.f;
+        constexpr float custom_height_ratio = 0.9f;
+
+        const float custom_height = caret.height * custom_height_ratio;
+        const float custom_top = caret.y
+            + (1.f - custom_height_ratio) * 0.5f
+            * caret.height
+            ;
+
         D2D1_RECT_F rect = {
-            caret.x, caret.y,
-            caret.x + custom_width,
-            caret.y + caret.height
+            caret.x - custom_width * 0.5f, 
+            custom_top,
+            caret.x + custom_width * 0.5f,
+            custom_top + custom_height
         };
         renderer->FillRectangle(rect, this->data.d2d_black);
     }

@@ -167,6 +167,8 @@ namespace RichED {
     struct CellHitTest { uint32_t pos; uint16_t trailing; uint16_t length; };
     // cell point
     struct CellPoint { CEDTextCell* cell; uint32_t offset; };
+    // char metrics
+    struct CharMetrics { unit_t offset, width; };
     // fixed string part 1
     struct FixedStringA {
         // string length
@@ -209,7 +211,7 @@ namespace RichED {
         Point           offset;
         // layout width
         unit_t          width;
-        // layout pos
+        // offset for visual-line 
         unit_t          pos;
         // ascender-height
         unit_t          ar_height;

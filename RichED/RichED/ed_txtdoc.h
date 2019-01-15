@@ -50,6 +50,8 @@ namespace RichED {
         uint32_t        lineno;
         // char offset for this logic line, 0 for first VL in LL
         uint32_t        char_len_before;
+        // char offset for this logic line, 0 for first VL in LL
+        uint32_t        char_len_this;
         // offset for this visual-line
         unit_t          offset;
         // max ascender-height in this visual-line
@@ -161,15 +163,15 @@ namespace RichED {
         // gui: right
         bool GuiRight(bool ctrl, bool shift) noexcept;
         // gui: up
-        bool GuiUp(bool shift) noexcept;
+        bool GuiUp(bool ctrl, bool shift) noexcept;
         // gui: down
-        bool GuiDown(bool shift) noexcept;
-        // gui: select all
-        bool GuiSelectAll() noexcept;
+        bool GuiDown(bool ctrl, bool shift) noexcept;
         // gui: home
         bool GuiHome(bool ctrl, bool shift) noexcept;
         // gui: end
         bool GuiEnd(bool ctrl, bool shift) noexcept;
+        // gui: select all
+        bool GuiSelectAll() noexcept;
         // gui: undo
         bool GuiUndo() noexcept;
         // gui: redo

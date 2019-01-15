@@ -211,12 +211,12 @@ namespace RichED { namespace detail {
         return rv;
     }
     // find
-    static void find_cell1_txtoff_ex(CEDTextCell*& cell, uint32_t& pos) noexcept {
+    static inline void find_cell1_txtoff_ex(CEDTextCell*& cell, uint32_t& pos) noexcept {
         const auto val = find_cell1_txtoff(cell, pos);
         cell = val.cell; pos = val.pos;
     }
     // find
-    static void find_cell2_txtoff_ex(CEDTextCell*& cell, uint32_t& pos) noexcept {
+    static inline void find_cell2_txtoff_ex(CEDTextCell*& cell, uint32_t& pos) noexcept {
         const auto val = find_cell2_txtoff(cell, pos);
         cell = val.cell; pos = val.pos;
     }
@@ -270,6 +270,12 @@ namespace RichED {
     struct CEDTextDocument::Private {
         // hit doc from position
         static bool HitTest(CEDTextDocument& doc, Point, HitTestCtx&) noexcept;
+        // hit doc from doc point
+        static void HitTest(CEDTextDocument& doc, DocPoint, HitTestCtx&) noexcept;
+        // check point
+        //static auto CheckPoint(CEDTextDocument& doc, DocPoint) noexcept->CellPoint;
+        // force update caret
+        static void UpdateCaret(CEDTextDocument& doc, DocPoint, HitTestCtx*) noexcept;
         // check range
         static bool CheckRange(CEDTextDocument& doc, DocPoint begin, DocPoint end, CheckRangeCtx& ctx) noexcept;
         // check wrap mode
@@ -279,7 +285,7 @@ namespace RichED {
         // recreate cell
         static void Recreate(CEDTextDocument&doc, CEDTextCell& cell) noexcept;
         // set selection
-        static void SetSelection(CEDTextDocument& doc, DocPoint dp, uint32_t mode, bool ) noexcept;
+        static void SetSelection(CEDTextDocument& doc, HitTestCtx*,DocPoint dp, uint32_t mode, bool ) noexcept;
         // insert text
         static bool Insert(CEDTextDocument& doc, DocPoint dp, U16View, LogicLine, bool behind)noexcept;
         // insert cell
@@ -290,6 +296,10 @@ namespace RichED {
         static void Dirty(CEDTextDocument& doc, CEDTextCell& cell, uint32_t logic_line)noexcept;
         // merge 
         static bool Merge(CEDTextDocument& doc, CEDTextCell& cell, unit_t, unit_t) noexcept;
+        // logic left move
+        static auto LogicLeft(CEDTextDocument& doc, DocPoint) noexcept ->DocPoint;
+        // logic right move
+        static auto LogicRight(CEDTextDocument& doc, DocPoint) noexcept->DocPoint;
     };
     // RichData ==
     inline bool operator==(const RichData& a, const RichData& b) noexcept {
@@ -304,6 +314,11 @@ namespace RichED {
         uint64_t u64;
         u64 = (uint64_t(dp.line) << 32) | uint64_t(dp.pos);
         return u64;
+    }
+    // Lower bound to VL
+    static auto LowerVL(VisualLine* b, VisualLine* e, uint32_t logic_line) noexcept {
+        const auto cmp = [](const VisualLine& vl, uint32_t ll) noexcept { return vl.lineno < ll; };
+        return std::lower_bound(b, e, logic_line, cmp);
     }
 #ifndef NDEBUG
     /// <summary>
@@ -605,7 +620,7 @@ bool RichED::CEDTextDocument::GuiLButtonUp(Point pt) noexcept {
             ctx.visual_line->lineno, 
             ctx.len_before_cell + ctx.len_in_cell
         };
-        Private::SetSelection(*this, dp, impl::mode_target, false);
+        Private::SetSelection(*this, &ctx, dp, impl::mode_target, false);
         return true;
     }
     return false;
@@ -666,6 +681,61 @@ bool RichED::CEDTextDocument::GuiReturn() noexcept {
         return this->GuiText({ line_feed, line_feed + 1 });
     }
     return false;
+}
+
+/// <summary>
+/// GUIs the left.
+/// </summary>
+/// <param name="ctrl">if set to <c>true</c> [control].</param>
+/// <param name="shift">if set to <c>true</c> [shift].</param>
+/// <returns></returns>
+bool RichED::CEDTextDocument::GuiLeft(bool ctrl, bool shift) noexcept {
+    // 左到右: 逻辑左
+    // 右到左: 逻辑右
+    // 上到下、下到上: 
+    //     右到左: 逻辑下
+    //     左到右: 逻辑上
+    Private::SetSelection(*this, nullptr, m_dpCaret, impl::mode_logicleft, shift);
+
+    return true;
+}
+
+/// <summary>
+/// GUIs the right.
+/// </summary>
+/// <param name="ctrl">if set to <c>true</c> [control].</param>
+/// <param name="shift">if set to <c>true</c> [shift].</param>
+/// <returns></returns>
+bool RichED::CEDTextDocument::GuiRight(bool ctrl, bool shift) noexcept {
+    // 左到右: 逻辑右
+    // 右到左: 逻辑左
+    // 上到下、下到上: 
+    //     右到左: 逻辑上
+    //     左到右: 逻辑下
+    Private::SetSelection(*this, nullptr, m_dpCaret, impl::mode_logicright, shift);
+
+    return true;
+}
+
+/// <summary>
+/// GUIs up.
+/// </summary>
+/// <param name="ctrl">if set to <c>true</c> [control].</param>
+/// <param name="shift">if set to <c>true</c> [shift].</param>
+/// <returns></returns>
+bool RichED::CEDTextDocument::GuiUp(bool ctrl, bool shift) noexcept {
+    return true;
+}
+
+
+/// <summary>
+/// GUIs down.
+/// </summary>
+/// <param name="ctrl">if set to <c>true</c> [control].</param>
+/// <param name="shift">if set to <c>true</c> [shift].</param>
+/// <returns></returns>
+bool RichED::CEDTextDocument::GuiDown(bool ctrl, bool shift) noexcept {
+    return true;
 }
 
 // ----------------------------------------------------------------------------
@@ -877,7 +947,7 @@ void RichED::CEDTextDocument::Private::ExpandVL(
                 // -------------------------
                 // --------------------- BOVL
                 // -------------------------
-
+                line.char_len_this = char_length_vl;
                 // 换行
                 if (!detail::push_data(vlv, line)) return;
                 cell->metrics.pos = 0;
@@ -913,6 +983,7 @@ void RichED::CEDTextDocument::Private::ExpandVL(
         line.dr_height_max = std::max(cell->metrics.dr_height, line.dr_height_max);
         // 换行
         if (new_line) {
+            line.char_len_this = char_length_vl;
             if (!detail::push_data(vlv, line)) return;
             line.char_len_before += char_length_vl;
             char_length_vl = 0;
@@ -1092,14 +1163,16 @@ auto RichED::CEDTextDocument::Private::CheckWrap(
 /// Sets the selection.
 /// </summary>
 /// <param name="doc">The document.</param>
+/// <param name="ctx">The CTX.</param>
 /// <param name="point">The point.</param>
 /// <param name="mode">The mode.</param>
-/// <param name="keepanchor">if set to <c>true</c> [keepanchor].</param>
+/// <param name="keep_anchor">if set to <c>true</c> [keep anchor].</param>
 /// <returns></returns>
 void RichED::CEDTextDocument::Private::SetSelection(
-    CEDTextDocument& doc, DocPoint point, 
-    uint32_t mode, bool keepanchor) noexcept {
+    CEDTextDocument& doc, HitTestCtx* ctx, DocPoint point,
+    uint32_t mode, bool keep_anchor) noexcept {
     const auto prev_caret = doc.m_dpCaret;
+    const auto prev_anchor = doc.m_dpAnchor;
     // 设置选择区
     switch (mode)
     {
@@ -1116,15 +1189,27 @@ void RichED::CEDTextDocument::Private::SetSelection(
         doc.m_dpCaret = point;
         break;
     case impl::mode_logicup:
+        // TODO: CTRL移动视口
         break;
     case impl::mode_logicdown:
+        // TODO: CTRL移动视口
         break;
     case impl::mode_logicleft:
+        // TODO: CTRL移动插入符(经过字符集群)
+        doc.m_dpCaret = Private::LogicLeft(doc, point);
         break;
     case impl::mode_logicright:
+        // TODO: CTRL移动插入符(经过字符集群)
+        doc.m_dpCaret = Private::LogicRight(doc, point);
         break;
     }
-    // 屏幕跟随插入符
+    // 不保留锚点
+    if (!keep_anchor) doc.m_dpAnchor = prev_caret;
+    // 更新
+    if (Cmp(prev_caret) != Cmp(doc.m_dpCaret) || 
+        Cmp(prev_anchor) != Cmp(doc.m_dpAnchor)) {
+        Private::UpdateCaret(doc, doc.m_dpCaret, ctx);
+    }
 }
 
 
@@ -1479,8 +1564,7 @@ void RichED::CEDTextDocument::Private::Dirty(CEDTextDocument& doc, CEDTextCell& 
     // 大概率在编辑第一行, 直接返回
     if (size < 2) return;
     // 利用二分查找到第一个, 然后, 删掉后面的
-    const auto cmp = [](const VisualLine& vl, uint32_t ll) noexcept { return vl.lineno < ll; };
-    const auto itr = std::lower_bound(vlv.begin(), vlv.end(), logic_line, cmp);
+    const auto itr = RichED::LowerVL(vlv.begin(), vlv.end(), logic_line);
     const uint32_t index = itr - vlv.begin();
     if (index < size) vlv.ReduceSize(index + 1);
 }
@@ -1585,4 +1669,165 @@ bool RichED::CEDTextDocument::Private::HitTest(
     ctx.len_before_cell = char_offset_in_line;
     ctx.len_in_cell = ht.pos + ht.trailing * ht.length;
     return true;
+}
+
+/// <summary>
+/// Hits the test.
+/// </summary>
+/// <param name="doc">The document.</param>
+/// <param name="dp">The dp.</param>
+/// <param name="ctx">The CTX.</param>
+/// <returns></returns>
+void RichED::CEDTextDocument::Private::HitTest(
+    CEDTextDocument& doc, DocPoint dp, HitTestCtx& ctx) noexcept {
+    ctx.text_cell = nullptr;
+    // 二分查找到指定行
+    auto& vlv = doc.m_vVisual;
+    const auto size = vlv.GetSize();
+    const auto bad_end = vlv.end() - 1;
+    auto itr = RichED::LowerVL(vlv.begin(), vlv.end(), dp.line);
+    // 有效行
+    if (itr < bad_end) {
+        // 搜索行
+        ctx.len_before_cell = 0;
+        while (dp.pos > itr->char_len_this) {
+            dp.pos -= itr->char_len_this;
+            ctx.len_before_cell += itr->char_len_this;
+            ++itr;
+            assert(itr < bad_end);
+        }
+        // 搜索cell
+        auto cell = itr->first;
+        auto pos = dp.pos;
+        detail::find_cell1_txtoff_ex(cell, pos);
+        ctx.visual_line = itr;
+        ctx.len_before_cell += dp.pos - pos;
+        ctx.len_in_cell = pos;
+        ctx.text_cell = cell;
+    }
+}
+
+#if 0
+/// <summary>
+/// Checks the point.
+/// </summary>
+/// <param name="doc">The document.</param>
+/// <param name="dp">The dp.</param>
+/// <returns></returns>
+auto RichED::CEDTextDocument::Private::CheckPoint(
+    CEDTextDocument & doc, DocPoint dp) noexcept -> CellPoint {
+    CellPoint cp = { nullptr, 0 };
+    const auto line = doc.m_vLogic.GetSize();
+    if (dp.line < line) {
+        const auto ll = doc.m_vLogic[dp.line];
+        cp.cell = ll.first;
+        cp.offset = dp.pos;
+        if (dp.pos > ll.length) cp.offset = ll.length;
+        detail::find_cell1_txtoff_ex(cp.cell, cp.offset);
+    }
+    return cp;
+}
+#endif
+
+/// <summary>
+/// Updates the caret.
+/// </summary>
+/// <param name="doc">The document.</param>
+/// <param name="dp">The dp.</param>
+/// <param name="pctx">The PCTX.</param>
+/// <returns></returns>
+void RichED::CEDTextDocument::Private::UpdateCaret(
+    CEDTextDocument & doc, DocPoint dp, HitTestCtx * pctx) noexcept {
+
+    HitTestCtx ctx;
+    if (!pctx) Private::HitTest(doc, dp, ctx);
+    else ctx = *pctx;
+    // 修改插入符位置
+    if (ctx.text_cell) {
+        auto& cell = *ctx.text_cell;
+        const auto pos = ctx.len_in_cell;
+        const auto cm = doc.platform.GetCharMetrics(cell, pos);
+        // TODO: 固定行高
+        doc.m_rcCaret.x = cell.metrics.pos + cm.offset;
+        doc.m_rcCaret.y = ctx.visual_line->offset;
+        doc.m_rcCaret.height
+            = ctx.visual_line->ar_height_max
+            + ctx.visual_line->dr_height_max
+            ;
+        doc.platform.ValueChanged(IEDTextPlatform::Changed_Caret);
+    }
+
+    // TODO: 部分情况视口跟随插入符
+}
+
+
+/// <summary>
+/// Logics the lr.
+/// </summary>
+/// <param name="doc">The document.</param>
+/// <param name="dp">The dp.</param>
+/// <param name="right">if set to <c>true</c> [right].</param>
+/// <returns></returns>
+auto RichED::CEDTextDocument::Private::LogicLeft(
+    CEDTextDocument& doc, DocPoint dp) noexcept -> DocPoint {
+    const auto& llv = doc.m_vLogic;
+    const auto s = llv.GetSize();
+    DocPoint rv = { 0 };
+    if (dp.line < s) {
+        const auto& line = llv[dp.line];
+        // 向前搜索
+        if (dp.pos) {
+            const auto first_cell = line.first;
+            auto pos = dp.pos;
+            auto cell = first_cell;
+            detail::find_cell1_txtoff_ex(cell, pos);
+            assert(pos && "BAD ACTION");
+            // 遇到注音则移动的到被注音前面(有的话)
+            // 否则检查UTF16规则, 避免移动到错误地点
+            rv = dp; --rv.pos;
+            if (detail::is_high_surrogate(cell->GetString().data[pos - 1])) --rv.pos;
+
+        }
+        // 处于行首
+        else {
+            // 换到上一行末尾
+            if (dp.line)  rv = { dp.line - 1 , (&line)[-1].length };
+        }
+    }
+    return rv;
+}
+
+
+/// <summary>
+/// Logics the right.
+/// </summary>
+/// <param name="doc">The document.</param>
+/// <param name="dp">The dp.</param>
+/// <returns></returns>
+auto RichED::CEDTextDocument::Private::LogicRight(
+    CEDTextDocument & doc, DocPoint dp) noexcept -> DocPoint {
+    const auto& llv = doc.m_vLogic;
+    const auto s = llv.GetSize();
+    DocPoint rv = { 0 };
+    if (dp.line < s) {
+        const auto line = llv[dp.line];
+        // 处于行末
+        if (dp.pos >= line.length) {
+            // 换到下一行行尾
+            rv = dp;
+            if (dp.line + 1 < s)  rv = { dp.line + 1 , 0 };
+        }
+        // 向后搜索
+        else {
+            // 遇到被注音则移动的到注音后面(有的话)
+            // 否则检查UTF16规则, 避免移动到错误地点
+            auto cell = line.first;
+            auto pos = dp.pos;
+            detail::find_cell2_txtoff_ex(cell, pos);
+            assert(pos < cell->GetString().length && "BAD ACTION");
+            rv = dp; ++rv.pos;
+            if (detail::is_low_surrogate(cell->GetString().data[pos])) ++rv.pos;
+        }
+    }
+    return rv;
 }

@@ -64,6 +64,8 @@ namespace RichED {
         virtual void DrawContext(CEDTextCell&, unit_t baseline) noexcept = 0;
         // hit test
         virtual auto HitTest(CEDTextCell&, unit_t offset) noexcept->CellHitTest = 0;
+        // get char metrics
+        virtual auto GetCharMetrics(CEDTextCell&, uint32_t pos) noexcept ->CharMetrics =0;
 #ifndef NDEBUG
         // debug output
         virtual void DebugOutput(const char*) noexcept = 0;
