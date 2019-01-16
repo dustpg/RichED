@@ -176,6 +176,9 @@ namespace RichED {
         bool GuiUndo() noexcept;
         // gui: redo
         bool GuiRedo() noexcept;
+    public: // GUI Operation - for Rich Text
+        // font size
+        //bool GuiFontSize() noexcept;
     public: // helper
         // valign helper h
         void VAlignHelperH(unit_t ar, unit_t height, CellMetrics& m) noexcept;

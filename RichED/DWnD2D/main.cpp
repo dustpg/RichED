@@ -127,6 +127,7 @@ struct WinDWnD2D final : IEDTextPlatform {
     uint32_t        cell_draw_i = 0;
     uint32_t        caret_blink_i = 0;
     uint32_t        caret_blink_time = 500;
+    char16_t        save_u16 = 0;
 
     // doc
     std::aligned_storage<sizeof(CEDTextDocument), alignof(CEDTextDocument)>
@@ -250,6 +251,7 @@ bool WinDWnD2D::Init(HWND hwnd) noexcept {
         this->Doc().InsertText({ 0, 0 }, u"国人发明的"_red);
         this->Doc().InsertRuby({ 0, 0 }, U'韩', u"宇宙"_red);
         this->Doc().InsertText({ 0, 0 }, u"字没准儿是"_red);
+        //this->Doc().InsertText({ 0, 0 }, u"😂😂😂😂😂"_red);
         this->Doc().InsertRuby({ 0, 0 }, U'汉', u"hàn"_red);
     }
     // 创建DWrite工厂
@@ -343,6 +345,15 @@ void WinDWnD2D::Clear() noexcept {
 
 
 LRESULT WinDWnD2D::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) noexcept {
+
+#define is_high_surrogate(ch) (((ch) & 0xFC00) == 0xD800)
+#define is_low_surrogate(ch) (((ch) & 0xFC00) == 0xDC00)
+    const auto char16x2_to_char32 = [](char16_t lead, char16_t trail) {
+        assert(is_high_surrogate(lead) && "illegal utf-16 char");
+        assert(is_low_surrogate(trail) && "illegal utf-16 char");
+        return (char32_t)((lead - 0xD800) << 10 | (trail - 0xDC00)) + (0x10000);
+    };
+
     bool handled = false;
     LRESULT result = 0;
     switch (message)
@@ -350,6 +361,7 @@ LRESULT WinDWnD2D::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
         bool ctrl, shift;
         int16_t x, y;
         PAINTSTRUCT ps;
+        char32_t ch;
     case WM_SIZE:
         g_platform.Resize(LOWORD(lParam), HIWORD(lParam));
         handled = true;
@@ -381,6 +393,19 @@ LRESULT WinDWnD2D::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
             g_platform.Doc().GuiLButtonUp({ (float)x, (float)y });
         }
         break;
+    case WM_CHAR:
+
+        ch = static_cast<char32_t>(wParam);
+        if (is_low_surrogate(char16_t(wParam))) {
+            ch = char16x2_to_char32(g_platform.save_u16, char16_t(wParam));
+        }
+        else if (is_high_surrogate(char16_t(wParam))) {
+            g_platform.save_u16 = char16_t(wParam);
+            break;
+        }
+        // 有效字符:  \b 之类的控制符不算
+        if (ch >= 0x20 || ch == '\t') g_platform.Doc().GuiChar(ch);
+        break;
     case WM_KEYDOWN:
         handled = true;
         result = 0;
@@ -406,10 +431,11 @@ LRESULT WinDWnD2D::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
         //case 'P':
         //    g_platform.Doc().InsertText({ 0, 1000 }, u"red \nblur"_red);
         //    break;
+        case VK_BACK:
+            g_platform.Doc().GuiBackspace(ctrl);
+            break;
         case VK_DELETE:
-            g_platform.Doc().RemoveText({ 0, 0 }, { 0, 1 });
-            //g_platform.Doc().RemoveText({ 0, 0 }, { 0, 10000 });
-            //g_platform.Doc().RemoveText({ 0, 1 }, { 0, 2 });
+            g_platform.Doc().GuiDelete(ctrl);
             break;
         case VK_F1:
             g_platform.Doc().SetFontSize({ 0, 7 }, { 0, 8 }, 20.f);

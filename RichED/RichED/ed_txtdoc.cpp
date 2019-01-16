@@ -26,22 +26,26 @@ namespace RichED { namespace detail {
     // is_surrogate
     inline bool is_surrogate(uint16_t ch) noexcept { return ((ch) & 0xF800) == 0xD800; }
     // is_low_surrogate
-    inline bool is_low_surrogate(uint16_t ch) noexcept { return ((ch) & 0xFC00) == 0xDC00; }
+    //inline bool is_low_surrogate(uint16_t ch) noexcept { return ((ch) & 0xFC00) == 0xDC00; }
     // is_high_surrogate
-    inline bool is_high_surrogate(uint16_t ch) noexcept { return ((ch) & 0xFC00) == 0xD800; }
+    //inline bool is_high_surrogate(uint16_t ch) noexcept { return ((ch) & 0xFC00) == 0xD800; }
+    // is_2nd_surrogate
+    inline bool is_2nd_surrogate(uint16_t ch) noexcept { return ((ch) & 0xFC00) == 0xDC00; }
+    // is_1st_surrogate
+    inline bool is_1st_surrogate(uint16_t ch) noexcept { return ((ch) & 0xFC00) == 0xD800; }
     // char16 x2 -> char32
     inline char32_t char16x2to32(char16_t lead, char16_t trail) {
-        assert(is_high_surrogate(lead) && "illegal utf-16 char");
-        assert(is_low_surrogate(trail) && "illegal utf-16 char");
+        assert(is_1st_surrogate(lead) && "illegal utf-16 char");
+        assert(is_2nd_surrogate(trail) && "illegal utf-16 char");
         return char32_t((uint16_t(lead) - 0xD800) << 10 | (uint16_t(trail) - 0xDC00)) + (0x10000);
     };
     // count char32_t 
     static uint32_t count(U16View view) noexcept {
         uint32_t c = 0;
         while (view.first < view.second) {
-            if (is_low_surrogate(*view.first)) {
+            if (is_1st_surrogate(*view.first)) {
                 view.first++;
-                assert(is_high_surrogate(*view.first));
+                assert(is_2nd_surrogate(*view.first));
             }
             c++;
             view.first++;
@@ -49,13 +53,14 @@ namespace RichED { namespace detail {
         return 0;
     }
     // lf count 
-    static uint32_t lfcount(U16View view) noexcept {
+    static DocPoint lfcount(U16View view) noexcept {
         uint32_t c = 0;
+        auto point = view.first;
         while (view.first < view.second) {
-            if (*view.first == '\n') c++;
+            if (*view.first == '\n') point = view.first + 1, c++;
             view.first++;
         }
-        return c;
+        return { c, static_cast<uint32_t>(view.second - point)};
     }
     // lf view
     static U16View lfview(U16View& view) noexcept {
@@ -87,7 +92,7 @@ namespace RichED { namespace detail {
             }
             ++itr;
         }
-        if (real_len && detail::is_low_surrogate(itr[-1])) ++itr;
+        if (real_len && detail::is_1st_surrogate(itr[-1])) ++itr;
         rv.second = view.first = itr;
         return rv;
     }
@@ -100,7 +105,7 @@ namespace RichED { namespace detail {
             if (itr[-1] == '\n') break;
             --itr;
         }
-        if (real_len && detail::is_high_surrogate(itr[-1])) --itr;
+        if (real_len && detail::is_2nd_surrogate(itr[-1])) --itr;
         rv.first = view.second = itr;
         return rv;
     }
@@ -239,7 +244,7 @@ namespace RichED { namespace impl {
         //mode_first,         // 文本开头
         //mode_last,          // 文本结尾
         //mode_leftchar,      // 左移字符
-        //mode_rightchar,     // 右移字符
+        mode_rightchar,     // 右移字符
         //mode_leftword,      // 左移字段
         //mode_rightword,     // 右移字段
     };
@@ -651,6 +656,11 @@ bool RichED::CEDTextDocument::GuiLButtonHold(Point pt) noexcept {
 /// <param name="ch">The ch.</param>
 /// <returns></returns>
 bool RichED::CEDTextDocument::GuiChar(char32_t ch) noexcept {
+#ifndef NDEBUG
+    if (!(ch >= 0x20 || ch == '\t')) {
+        this->platform.DebugOutput("<CEDTextDocument::GuiChar>: control char NOT accepted.");
+    }
+#endif
     char16_t buf[2];
     const auto len = detail::utf32to16(ch, buf);
     return this->GuiText({ buf, buf + len });
@@ -665,9 +675,50 @@ bool RichED::CEDTextDocument::GuiChar(char32_t ch) noexcept {
 bool RichED::CEDTextDocument::GuiText(U16View view) noexcept {
     // 只读
     if (m_info.flags & Flag_GuiReadOnly) return false;
-    
-    assert(!"NOT IMPL");
-    return false;
+    // 插入
+    this->InsertText(m_dpCaret, view, true);
+    // 计算距离
+    const auto move = detail::lfcount(view);
+    Private::SetSelection(*this, nullptr, move, impl::mode_rightchar, false);
+
+    return true;
+}
+
+/// <summary>
+/// GUIs the backspace.
+/// </summary>
+/// <param name="ctrl">if set to <c>true</c> [control].</param>
+/// <returns></returns>
+bool RichED::CEDTextDocument::GuiBackspace(bool ctrl) noexcept {
+    // 只读
+    if (m_info.flags & Flag_GuiReadOnly) return false;
+    // TODO: CTRL支持
+    const auto after = Private::LogicLeft(*this, m_dpCaret);
+    if (Cmp(after) == Cmp(m_dpCaret)) return false;
+    // 删除
+    this->RemoveText(after, m_dpCaret);
+    // 设置
+    Private::SetSelection(*this, nullptr, after, impl::mode_target, false);
+
+    return true;
+}
+
+/// <summary>
+/// GUIs the delete.
+/// </summary>
+/// <param name="ctrl">if set to <c>true</c> [control].</param>
+/// <returns></returns>
+bool RichED::CEDTextDocument::GuiDelete(bool ctrl) noexcept {
+    // 只读
+    if (m_info.flags & Flag_GuiReadOnly) return false;
+    // TODO: CTRL支持
+    const auto after = Private::LogicRight(*this, m_dpCaret);
+    if (Cmp(after) == Cmp(m_dpCaret)) return false;
+    // 删除
+    this->RemoveText(m_dpCaret, after);
+    // 设置
+
+    return true;
 }
 
 /// <summary>
@@ -1127,11 +1178,11 @@ auto RichED::CEDTextDocument::Private::CheckWrap(
             if (ch == ' ') return cell.Split(this_index);
             // CJK需要提前一个字符
             char32_t cjk; const auto lch = str[this_index - 1];
-            if (detail::is_high_surrogate(lch)) {
+            if (detail::is_2nd_surrogate(lch)) {
                 assert(index); --index;
                 const auto pch = str[this_index - 2];
-                assert(detail::is_low_surrogate(pch));
-                cjk = detail::char16x2to32(lch, pch);
+                assert(detail::is_1st_surrogate(pch));
+                cjk = detail::char16x2to32(pch, lch);
             }
             else cjk = static_cast<char32_t>(lch);
             if (detail::is_cjk(cjk)) return cell.Split(this_index);
@@ -1141,10 +1192,10 @@ auto RichED::CEDTextDocument::Private::CheckWrap(
             const auto ch = str[index];
             if (ch == ' ') return cell.Split(index + 1);
             char32_t cjk;
-            if (detail::is_low_surrogate(ch)) {
+            if (detail::is_1st_surrogate(ch)) {
                 const auto nch = str[++index];
-                assert(detail::is_high_surrogate(nch));
-                cjk = detail::char16x2to32(nch, ch);
+                assert(detail::is_2nd_surrogate(nch));
+                cjk = detail::char16x2to32(ch, nch);
             }
             else cjk = static_cast<char32_t>(ch);
             if (detail::is_cjk(cjk)) return cell.Split(index);
@@ -1202,13 +1253,24 @@ void RichED::CEDTextDocument::Private::SetSelection(
         // TODO: CTRL移动插入符(经过字符集群)
         doc.m_dpCaret = Private::LogicRight(doc, point);
         break;
+    case impl::mode_rightchar:
+        doc.m_dpCaret.line += point.line;
+        if (point.line) doc.m_dpCaret.pos = point.pos;
+        else doc.m_dpCaret.pos += point.pos;
+        break;
     }
     // 不保留锚点
-    if (!keep_anchor) doc.m_dpAnchor = prev_caret;
+    if (!keep_anchor) doc.m_dpAnchor = doc.m_dpCaret;
     // 更新
     if (Cmp(prev_caret) != Cmp(doc.m_dpCaret) || 
         Cmp(prev_anchor) != Cmp(doc.m_dpAnchor)) {
         Private::UpdateCaret(doc, doc.m_dpCaret, ctx);
+#ifndef NDEBUG
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), "[%d, %d]", doc.m_dpCaret.line, doc.m_dpCaret.pos);
+        doc.platform.DebugOutput(buf);
+#endif // !NDEBUG
+
     }
 }
 
@@ -1258,7 +1320,7 @@ bool RichED::CEDTextDocument::Private::Insert(
 
     // 1. 插入双字UTF16中间
     if (pos < cell->GetString().length) {
-        if (detail::is_high_surrogate(cell->GetString().data[pos])) return false;
+        if (detail::is_2nd_surrogate(cell->GetString().data[pos])) return false;
     }
     // 插在后面
     else {
@@ -1294,7 +1356,7 @@ bool RichED::CEDTextDocument::Private::Insert(
 
 
     // 第一次遍历, 为m_vLogic创建空间
-    const auto lf_count = detail::lfcount(view);
+    const auto lf_count = detail::lfcount(view).line;
     if (lf_count) {
         //[lf_count, &doc, dp, linedata]() noexcept {
         const size_t moved = sizeof(LogicLine) * (doc.m_vLogic.GetSize() - dp.line - 1);
@@ -1391,7 +1453,7 @@ bool RichED::CEDTextDocument::Private::Insert(
                 // 越界
                 if (this_end > line_view.second) this_end = line_view.second;
                 // 双字检查
-                if (detail::is_low_surrogate(this_end[-1])) ++this_end;
+                if (detail::is_1st_surrogate(this_end[-1])) ++this_end;
                 // 创建CELL
                 const auto obj = RichED::CreateNormalCell(doc, riched);
                 if (!obj) return false;
@@ -1601,12 +1663,13 @@ bool RichED::CEDTextDocument::Private::CheckRange(
             auto pos2 = end.pos;
             auto cell2 = line_data2.first;
             detail::find_cell2_txtoff_ex(cell1, pos1);
+            // TODO: [优化] cell2从cell1处搜索
             detail::find_cell1_txtoff_ex(cell2, pos2);
             assert(cell1 != cell2 || pos1 != pos2);
             // 删除无效区间
-            if (detail::is_high_surrogate(cell1->GetString().data[pos1])) return false;
+            if (detail::is_2nd_surrogate(cell1->GetString().data[pos1])) return false;
             if (pos2 < cell2->GetString().length)
-                if (detail::is_high_surrogate(cell2->GetString().data[pos2])) return false;
+                if (detail::is_2nd_surrogate(cell2->GetString().data[pos2])) return false;
             ctx.begin = { cell1, pos1 };
             ctx.end = { cell2, pos2 };
             ctx.line1 = &line_data1;
@@ -1644,8 +1707,17 @@ bool RichED::CEDTextDocument::Private::HitTest(
     int offset = -1;
     // 太高的话算第一行
     if (itr == vlv.begin()) offset = 0;
-    // 太低的话算倒数第二行(最后一行是END-CELL)
-    else if (itr == vlv.end()) offset = -2;
+    // 太低的话算末尾
+    else if (itr == vlv.end()) {
+        auto& last = itr[-1];
+        ctx.visual_line = &itr[-2];
+        ctx.text_cell = static_cast<CEDTextCell*>(last.first->prev);
+        ctx.len_before_cell = ctx.visual_line->char_len_before;
+        ctx.len_before_cell += ctx.visual_line->char_len_this;
+        ctx.len_in_cell = ctx.text_cell->GetString().length;
+        ctx.len_before_cell -= ctx.len_in_cell;
+        return true;
+    }
     // 获取指定信息
     const auto& line0 = itr[offset];
     ctx.visual_line = &line0;
@@ -1783,10 +1855,24 @@ auto RichED::CEDTextDocument::Private::LogicLeft(
             detail::find_cell1_txtoff_ex(cell, pos);
             assert(pos && "BAD ACTION");
             // 遇到注音则移动的到被注音前面(有的话)
+            rv = dp; 
+            if (cell->GetMetaInfo().metatype == Type_Ruby) {
+                rv.pos -= pos;
+                while (cell != first_cell) {
+                    cell = static_cast<CEDTextCell*>(cell->prev);
+                    if (cell->GetMetaInfo().metatype != Type_Ruby) {
+                        if (cell->GetMetaInfo().metatype == Type_UnderRuby)
+                            rv.pos -= cell->GetString().length;
+                        break;
+                    }
+                    rv.pos -= cell->GetString().length;
+                }
+            }
             // 否则检查UTF16规则, 避免移动到错误地点
-            rv = dp; --rv.pos;
-            if (detail::is_high_surrogate(cell->GetString().data[pos - 1])) --rv.pos;
-
+            else {
+                --rv.pos;
+                if (detail::is_2nd_surrogate(cell->GetString().data[pos - 1])) --rv.pos;
+            }
         }
         // 处于行首
         else {
@@ -1819,14 +1905,25 @@ auto RichED::CEDTextDocument::Private::LogicRight(
         }
         // 向后搜索
         else {
-            // 遇到被注音则移动的到注音后面(有的话)
-            // 否则检查UTF16规则, 避免移动到错误地点
             auto cell = line.first;
             auto pos = dp.pos;
+            rv = dp;
             detail::find_cell2_txtoff_ex(cell, pos);
-            assert(pos < cell->GetString().length && "BAD ACTION");
-            rv = dp; ++rv.pos;
-            if (detail::is_low_surrogate(cell->GetString().data[pos])) ++rv.pos;
+            // 遇到被注音则移动的到注音后面(有的话)
+            if (cell->GetMetaInfo().metatype == Type_UnderRuby) {
+                rv.pos += cell->GetString().length - pos;
+                while (!cell->GetMetaInfo().eol) {
+                    cell = detail::next_cell(cell);
+                    if (cell->GetMetaInfo().metatype != Type_Ruby) break;
+                    rv.pos += cell->GetString().length;
+                }
+            }
+            // 否则检查UTF16规则, 避免移动到错误地点
+            else {
+                assert(pos < cell->GetString().length && "BAD ACTION");
+                ++rv.pos;
+                if (detail::is_1st_surrogate(cell->GetString().data[pos])) ++rv.pos;
+            }
         }
     }
     return rv;
