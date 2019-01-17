@@ -161,6 +161,8 @@ namespace RichED {
     struct Range { uint32_t pos, len; };
     // doc point
     struct DocPoint { uint32_t line, pos; };
+    // doc range
+    //struct DocRange { DocPoint begin, end; };
     // utf-16 stirng-view
     struct U16View { const char16_t* first, *second; };
     // cell hittest

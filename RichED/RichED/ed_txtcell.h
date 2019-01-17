@@ -45,13 +45,13 @@ namespace RichED {
         // sleep
         void Sleep() noexcept;
         // get string data
-        auto&GetString() const noexcept { return m_string; }
+        auto&RefString() const noexcept { return m_string; }
         // get meta info
-        auto&GetMetaInfo() const noexcept { return m_meta; }
+        auto&RefMetaInfo() const noexcept { return m_meta; }
         // get logic length
         //auto GetLogicLength() const noexcept->uint32_t;
         // get riched data
-        auto&GetRichED() const noexcept { return m_riched; }
+        auto&RefRichED() const noexcept { return m_riched; }
         // set new riched
         void SetRichED(const RichData&) noexcept;
         // clean!

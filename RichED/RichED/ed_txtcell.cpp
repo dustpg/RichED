@@ -20,8 +20,8 @@ namespace RichED { namespace detail {
     void estimate(CEDTextCell& cell) noexcept {
         // 估计高度 = 字体大小
         // 估计宽度 = 字体大小 * 字符个数
-        //const auto len = cell.GetString().length;
-        //const auto fontsize = cell.GetRichED().size;
+        //const auto len = cell.RefString().length;
+        //const auto fontsize = cell.RefRichED().size;
         //cell.metrics.ar_height = 0;
         //cell.metrics.dr_height = fontsize;
         //cell.metrics.width = times(fontsize, len);

@@ -123,6 +123,8 @@ struct WinDWnD2D final : IEDTextPlatform {
     // render
     void Render() noexcept;
 
+    void DrawSelection() noexcept;
+
 
     uint32_t        cell_draw_i = 0;
     uint32_t        caret_blink_i = 0;
@@ -379,6 +381,13 @@ LRESULT WinDWnD2D::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
         g_platform.caret_blink_i ^= 1;
         ::InvalidateRect(hwnd, nullptr, false);
         break;
+    case WM_MOUSEMOVE:
+        x = int16_t(LOWORD(lParam)) - CTRL_X;
+        y = int16_t(HIWORD(lParam)) - CTRL_Y;
+        if (wParam & MK_LBUTTON) {
+            g_platform.Doc().GuiLButtonHold({ (float)x, (float)y });
+        }
+        break;
     case WM_LBUTTONDOWN:
         x = int16_t(LOWORD(lParam)) - CTRL_X;
         y = int16_t(HIWORD(lParam)) - CTRL_Y;
@@ -410,7 +419,7 @@ LRESULT WinDWnD2D::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
         handled = true;
         result = 0;
         ctrl = (::GetKeyState(VK_CONTROL) & 0x80) != 0;
-        shift = (::GetKeyState(VK_CONTROL) & 0x80) != 0;
+        shift = (::GetKeyState(VK_SHIFT) & 0x80) != 0;
         switch (wParam)
         {
         default:
@@ -488,12 +497,12 @@ void WinDWnD2D::RecreateContext(CEDTextCell& cell) noexcept {
     cell.ctx.context = nullptr;
     if (prev_layout) prev_layout->Release();
     // 利用字符串创建DWrite文本布局
-    const auto& str = cell.GetString();
+    const auto& str = cell.RefString();
     // 空的场合
     if (!str.length) {
-        if (cell.GetMetaInfo().dirty) {
+        if (cell.RefMetaInfo().dirty) {
             cell.metrics.width = 0;
-            const auto h = cell.GetRichED().size;
+            const auto h = cell.RefRichED().size;
             cell.metrics.ar_height = h;
             cell.metrics.dr_height = 0;
             cell.metrics.bounding.left = 0;
@@ -508,8 +517,8 @@ void WinDWnD2D::RecreateContext(CEDTextCell& cell) noexcept {
     // 创建新的文本格式
     const auto fmt = [=, &cell]() noexcept -> IDWriteTextFormat* {
         // 富文本模式
-        if (this->Doc().GetInfo().flags & Flag_RichText) {
-            const auto& riched = cell.GetRichED();
+        if (this->Doc().RefInfo().flags & Flag_RichText) {
+            const auto& riched = cell.RefRichED();
             IDWriteTextFormat* fmt = nullptr;
             dw1_factory->CreateTextFormat(
                 FONT_NAME_LIST[riched.name],
@@ -540,7 +549,7 @@ void WinDWnD2D::RecreateContext(CEDTextCell& cell) noexcept {
         fmt, 0, 0, reinterpret_cast<IDWriteTextLayout**>(&cell.ctx.context)
     );
     // 测量CELL
-    if (cell.GetMetaInfo().dirty) {
+    if (cell.RefMetaInfo().dirty) {
         const auto layout = reinterpret_cast<IDWriteTextLayout*>(cell.ctx.context);
         DWRITE_TEXT_METRICS dwtm;
         DWRITE_LINE_METRICS dwlm;
@@ -597,8 +606,8 @@ void WinDWnD2D::DrawContext(CEDTextCell& cell, unit_t baseline) noexcept {
     if (const auto ptr = static_cast<IDWriteTextLayout*>(cell.ctx.context)) {
         const auto brush = this->data.d2d_brush;
         // 富文本
-        if (this->Doc().GetInfo().flags & Flag_RichText) {
-            brush->SetColor(D2D1::ColorF(cell.GetRichED().color));
+        if (this->Doc().RefInfo().flags & Flag_RichText) {
+            brush->SetColor(D2D1::ColorF(cell.RefRichED().color));
         }
         // 渲染CELL
         point.y = baseline - cell.metrics.ar_height + cell.metrics.offset.y;
@@ -615,7 +624,7 @@ void WinDWnD2D::DrawContext(CEDTextCell& cell, unit_t baseline) noexcept {
         renderer->DrawTextLayout(point, ptr, brush);
     }
     // 下划线
-    if (cell.GetRichED().effect & Effect_Underline) {
+    if (cell.RefRichED().effect & Effect_Underline) {
         point.y = baseline + cell.metrics.dr_height + cell.metrics.offset.y;
         const auto renderer = this->data.d2d_rendertarget;
         auto point2 = point; point2.x += cell.metrics.width;
@@ -687,7 +696,7 @@ auto WinDWnD2D::GetCharMetrics(CEDTextCell& cell, uint32_t pos) noexcept -> Char
     if (!cell.ctx.context) this->RecreateContext(cell);
     // 失败则不获取
     if (const auto ptr = static_cast<IDWriteTextLayout*>(cell.ctx.context)) {
-        if (pos == cell.GetString().length) {
+        if (pos == cell.RefString().length) {
             cm.offset = cell.metrics.width;
         }
         else try {
@@ -745,6 +754,21 @@ void WinDWnD2D::Resize(uint32_t width, uint32_t height) noexcept {
 }
 
 
+void WinDWnD2D::DrawSelection() noexcept {
+    const auto brush = this->data.d2d_brush;
+    brush->SetColor(D2D1::ColorF(D2D1::ColorF::White, 0.5f));
+    const auto renderer = this->data.d2d_rendertarget;
+    const auto& vec = this->Doc().RefSelection();
+    for (auto& rect : vec) {
+        D2D1_RECT_F rc;
+        rc.left = rect.left;
+        rc.top = rect.top;
+        rc.right = rect.right;
+        rc.bottom = rect.bottom;
+        renderer->FillRectangle(rc, brush);
+    }
+}
+
 /// <summary>
 /// Renders this instance.
 /// </summary>
@@ -760,6 +784,8 @@ void WinDWnD2D::Render() noexcept {
     renderer->Clear(D2D1::ColorF(0x66ccff));
     renderer->SetTransform(D2D1::Matrix3x2F::Translation(CTRL_X, CTRL_Y));
     renderer->DrawRectangle({0, 0, ctrl_w, ctrl_h }, brush);
+
+    this->DrawSelection();
     this->Doc().Render();
     if (this->caret_blink_i) {
         const auto caret = this->Doc().GetCaret();

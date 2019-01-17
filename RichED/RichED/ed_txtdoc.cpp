@@ -198,8 +198,8 @@ namespace RichED { namespace detail {
     // find
     PCN_NOINLINE static auto find_cell1_txtoff(CEDTextCell* cell, uint32_t pos) noexcept {
         // 遍历到合适的位置
-        while (pos > cell->GetString().length) {
-            pos -= cell->GetString().length;
+        while (pos > cell->RefString().length) {
+            pos -= cell->RefString().length;
             cell = detail::next_cell(cell);
         }
         const txtoff_t rv = { cell, pos };
@@ -208,8 +208,8 @@ namespace RichED { namespace detail {
     // find
     PCN_NOINLINE static auto find_cell2_txtoff(CEDTextCell* cell, uint32_t pos) noexcept {
         // 遍历到合适的位置
-        while (pos >= cell->GetString().length) {
-            pos -= cell->GetString().length;
+        while (pos >= cell->RefString().length) {
+            pos -= cell->RefString().length;
             cell = detail::next_cell(cell);
         }
         const txtoff_t rv = { cell, pos };
@@ -280,7 +280,11 @@ namespace RichED {
         // check point
         //static auto CheckPoint(CEDTextDocument& doc, DocPoint) noexcept->CellPoint;
         // force update caret
-        static void UpdateCaret(CEDTextDocument& doc, DocPoint, HitTestCtx*) noexcept;
+        static void RefreshCaret(CEDTextDocument& doc, DocPoint, HitTestCtx*) noexcept;
+        // update selection
+        static void UpdateSelection(CEDTextDocument&, DocPoint caret, DocPoint anc) noexcept;
+        // force update selection
+        static void RefreshSelection(CEDTextDocument&, DocPoint begin, DocPoint end) noexcept;
         // check range
         static bool CheckRange(CEDTextDocument& doc, DocPoint begin, DocPoint end, CheckRangeCtx& ctx) noexcept;
         // check wrap mode
@@ -320,6 +324,10 @@ namespace RichED {
         u64 = (uint64_t(dp.line) << 32) | uint64_t(dp.pos);
         return u64;
     }
+    // selection swap
+    inline void CmpSwap(DocPoint& a, DocPoint& b) noexcept {
+        if (Cmp(a) > Cmp(b)) std::swap(a, b);
+    }
     // Lower bound to VL
     static auto LowerVL(VisualLine* b, VisualLine* e, uint32_t logic_line) noexcept {
         const auto cmp = [](const VisualLine& vl, uint32_t ll) noexcept { return vl.lineno < ll; };
@@ -334,8 +342,8 @@ namespace RichED {
     static uint32_t GetLineTextLength(CEDTextCell* cell) noexcept {
         uint32_t length = 0;
         while (true) {
-            length += cell->GetString().length;
-            if (cell->GetMetaInfo().eol) break;
+            length += cell->RefString().length;
+            if (cell->RefMetaInfo().eol) break;
             cell = detail::next_cell(cell);
         }
         return length;
@@ -361,6 +369,8 @@ RichED::CEDTextDocument::CEDTextDocument(IEDTextPlatform& plat, const DocInitArg
     m_szEstimated = { 0, 0 };
     m_dpAnchor = { 0, 0 };
     m_dpCaret = { 0, 0 };
+    m_dpSelBegin = { 0, 0 };
+    m_dpSelEnd = { 0, 0 };
     // 处理Cell节点
     m_head.prev = nullptr;
     m_head.next = &m_tail;
@@ -502,13 +512,13 @@ bool RichED::CEDTextDocument::InsertRuby(DocPoint dp, char32_t ch, U16View view,
         riched.size = half(riched.size);
         const auto cell = RichED::CreateShrinkedCell(*this, riched);;
         if (!cell) return false;
-        const_cast<CellMeta&>(cell->GetMetaInfo()).metatype = Type_UnderRuby;
-        auto& str = const_cast<FixedStringA&>(cell->GetString());
+        const_cast<CellMeta&>(cell->RefMetaInfo()).metatype = Type_UnderRuby;
+        auto& str = const_cast<FixedStringA&>(cell->RefString());
         str.capacity = str.length = detail::utf32to16(ch, str.data);
         // 插入内联对象
         if (!this->InsertInline(dp, std::move(*cell))) return false;
         // 插入普通数据
-        dp.pos += cell->GetString().length;
+        dp.pos += cell->RefString().length;
         const auto rv = Private::Insert(*this, dp, real_view, line_data, false);
         cell->SetRichED(default_riched);
         return rv;
@@ -748,6 +758,9 @@ bool RichED::CEDTextDocument::GuiLeft(bool ctrl, bool shift) noexcept {
     //     左到右: 逻辑上
     Private::SetSelection(*this, nullptr, m_dpCaret, impl::mode_logicleft, shift);
 
+    // 更新选择区域
+    Private::UpdateSelection(*this, m_dpCaret, m_dpAnchor);
+
     return true;
 }
 
@@ -765,6 +778,8 @@ bool RichED::CEDTextDocument::GuiRight(bool ctrl, bool shift) noexcept {
     //     左到右: 逻辑下
     Private::SetSelection(*this, nullptr, m_dpCaret, impl::mode_logicright, shift);
 
+    // 更新选择区域
+    Private::UpdateSelection(*this, m_dpCaret, m_dpAnchor);
     return true;
 }
 
@@ -813,7 +828,7 @@ bool RichED::CEDTextDocument::set_riched(
 
     // 修改数据
     const auto set_data = [data, offset, size](CEDTextCell& cell) noexcept {
-        auto& rd = const_cast<RichData&>(cell.GetRichED());
+        auto& rd = const_cast<RichData&>(cell.RefRichED());
         char* const dst = reinterpret_cast<char*>(&rd);
         const char* const src = reinterpret_cast<const char*>(data); 
         std::memcpy(dst + offset, src, size);
@@ -885,7 +900,7 @@ bool RichED::CEDTextDocument::set_flags(
     static_assert(sizeof(RichData::effect) == sizeof(uint16_t), "same!");
     // 获取标志
     const auto ref_flags = [flag_offset](CEDTextCell& cell) noexcept -> uint16_t& {
-        auto& rd = const_cast<RichData&>(cell.GetRichED());
+        auto& rd = const_cast<RichData&>(cell.RefRichED());
         char* const dst = reinterpret_cast<char*>(&rd);
         uint16_t* const rv = reinterpret_cast<uint16_t*>(dst + flag_offset);
         return *rv;
@@ -982,7 +997,7 @@ void RichED::CEDTextDocument::Private::ExpandVL(
         if (Private::Merge(doc, *cell, viewport_w, offset_inline)) 
             cell->MergeWithNext();
 
-        bool new_line = cell->GetMetaInfo().eol;
+        bool new_line = cell->RefMetaInfo().eol;
         //
 
         // 重建脏CELL
@@ -991,8 +1006,8 @@ void RichED::CEDTextDocument::Private::ExpandVL(
         const auto offset_end = offset_inline + cell->metrics.width;
         if (doc.m_info.wrap_mode && offset_end > viewport_w && cell->metrics.width > 0) {
             // 整个CELL换行
-            if (cell->GetMetaInfo().metatype >= Type_UnknownInline ||
-                offset_inline + cell->GetRichED().size > viewport_w ||
+            if (cell->RefMetaInfo().metatype >= Type_UnknownInline ||
+                offset_inline + cell->RefRichED().size > viewport_w ||
                 Private::CheckWrap(doc, *cell, viewport_w - offset_inline) == cell
                 ) {
                 // -------------------------
@@ -1016,7 +1031,7 @@ void RichED::CEDTextDocument::Private::ExpandVL(
             else {
                 new_line = true;
                 // 重建脏CELL
-                if (cell->GetMetaInfo().dirty) doc.platform.RecreateContext(*cell);
+                if (cell->RefMetaInfo().dirty) doc.platform.RecreateContext(*cell);
             }
         }
 
@@ -1028,7 +1043,7 @@ void RichED::CEDTextDocument::Private::ExpandVL(
         // 行内偏移
         cell->metrics.pos = offset_inline;
         offset_inline += cell->metrics.width;
-        char_length_vl += cell->GetString().length;
+        char_length_vl += cell->RefString().length;
         // 行内升部降部最大信息
         line.ar_height_max = std::max(cell->metrics.ar_height, line.ar_height_max);
         line.dr_height_max = std::max(cell->metrics.dr_height, line.dr_height_max);
@@ -1038,8 +1053,8 @@ void RichED::CEDTextDocument::Private::ExpandVL(
             if (!detail::push_data(vlv, line)) return;
             line.char_len_before += char_length_vl;
             char_length_vl = 0;
-            line.lineno += cell->GetMetaInfo().eol;
-            if (cell->GetMetaInfo().eol) line.char_len_before = 0;
+            line.lineno += cell->RefMetaInfo().eol;
+            if (cell->RefMetaInfo().eol) line.char_len_before = 0;
             line.first = detail::next_cell(cell);
             // 行偏移 = 上一行偏移 + 上一行最大升高 + 上一行最大降高
             line.offset += line.ar_height_max + line.dr_height_max;
@@ -1065,16 +1080,16 @@ void RichED::CEDTextDocument::Private::ExpandVL(
 void RichED::CEDTextDocument::Private::Recreate(
     CEDTextDocument&doc, CEDTextCell& cell) noexcept {
     // 被注音的
-    if (cell.GetMetaInfo().metatype == Type_UnderRuby) {
+    if (cell.RefMetaInfo().metatype == Type_UnderRuby) {
         // 第一次遍历: 重建检查是否重建
         bool need_create = false;
         const auto end_cell = [&cell, &need_create]() noexcept {
-            need_create = cell.GetMetaInfo().dirty;
+            need_create = cell.RefMetaInfo().dirty;
             auto node = detail::next_cell(&cell);
-            //assert(node->GetMetaInfo().metatype == Type_Ruby);
-            while (node->GetMetaInfo().metatype == Type_Ruby) {
-                need_create |= node->GetMetaInfo().dirty;
-                const auto eol = node->GetMetaInfo().eol;
+            //assert(node->RefMetaInfo().metatype == Type_Ruby);
+            while (node->RefMetaInfo().metatype == Type_Ruby) {
+                need_create |= node->RefMetaInfo().dirty;
+                const auto eol = node->RefMetaInfo().eol;
                 node = detail::next_cell(node);
                 if (eol) break;
             }
@@ -1117,7 +1132,7 @@ void RichED::CEDTextDocument::Private::Recreate(
         }
     }
     // 普通CELL
-    else if (cell.GetMetaInfo().dirty) doc.platform.RecreateContext(cell);
+    else if (cell.RefMetaInfo().dirty) doc.platform.RecreateContext(cell);
 }
 
 /// <summary>
@@ -1130,8 +1145,8 @@ bool RichED::CEDTextDocument::Private::Merge(
     CEDTextDocument & doc, CEDTextCell & cell, 
     unit_t width, unit_t offset) noexcept {
     if (!doc.m_info.wrap_mode) return true;
-    if (cell.GetMetaInfo().eol) return false;
-    const unit_t fs = cell.GetRichED().size;
+    if (cell.RefMetaInfo().eol) return false;
+    const unit_t fs = cell.RefRichED().size;
     return offset + cell.metrics.width + fs < width;
 }
 
@@ -1145,8 +1160,8 @@ bool RichED::CEDTextDocument::Private::Merge(
 auto RichED::CEDTextDocument::Private::CheckWrap(
     CEDTextDocument& doc, CEDTextCell& cell, unit_t pos) noexcept ->CEDTextCell* {
     const auto mode = doc.m_info.wrap_mode;
-    const auto str = cell.GetString().data;
-    const auto len = cell.GetString().length;
+    const auto str = cell.RefString().data;
+    const auto len = cell.RefString().length;
     switch (mode & 3)
     {
         CellHitTest hittest; uint32_t index;
@@ -1168,7 +1183,7 @@ auto RichED::CEDTextDocument::Private::CheckWrap(
         break;
     case Mode_SpaceOrCJK:
         hittest = doc.platform.HitTest(cell, pos);
-        assert(hittest.pos < cell.GetString().length);
+        assert(hittest.pos < cell.RefString().length);
         // 向前查找空格、CJK
         index = hittest.pos;
         do {
@@ -1264,10 +1279,14 @@ void RichED::CEDTextDocument::Private::SetSelection(
     // 更新
     if (Cmp(prev_caret) != Cmp(doc.m_dpCaret) || 
         Cmp(prev_anchor) != Cmp(doc.m_dpAnchor)) {
-        Private::UpdateCaret(doc, doc.m_dpCaret, ctx);
+        Private::RefreshCaret(doc, doc.m_dpCaret, ctx);
 #ifndef NDEBUG
         char buf[64];
-        std::snprintf(buf, sizeof(buf), "[%d, %d]", doc.m_dpCaret.line, doc.m_dpCaret.pos);
+        std::snprintf(
+            buf, sizeof(buf), "C[%d, %d] A[%d, %d]", 
+            doc.m_dpCaret.line, doc.m_dpCaret.pos,
+            doc.m_dpAnchor.line, doc.m_dpAnchor.pos
+        );
         doc.platform.DebugOutput(buf);
 #endif // !NDEBUG
 
@@ -1319,8 +1338,8 @@ bool RichED::CEDTextDocument::Private::Insert(
 
 
     // 1. 插入双字UTF16中间
-    if (pos < cell->GetString().length) {
-        if (detail::is_2nd_surrogate(cell->GetString().data[pos])) return false;
+    if (pos < cell->RefString().length) {
+        if (detail::is_2nd_surrogate(cell->RefString().data[pos])) return false;
     }
     // 插在后面
     else {
@@ -1336,7 +1355,7 @@ bool RichED::CEDTextDocument::Private::Insert(
             pos = 0; 
         }
         // 插入被注音后面算作注音
-        switch (cell->GetMetaInfo().metatype)
+        switch (cell->RefMetaInfo().metatype)
         {
         case Type_Ruby:
         case Type_UnderRuby:
@@ -1349,7 +1368,7 @@ bool RichED::CEDTextDocument::Private::Insert(
     // 1. 通常: CELL自带格式
     // 2. 其他: 默认格式?
     const auto riched = *([=, &doc]() noexcept {
-        return &cell->GetRichED();
+        return &cell->RefRichED();
         //return &doc.default_riched;
     }()); 
 
@@ -1377,8 +1396,8 @@ bool RichED::CEDTextDocument::Private::Insert(
 
 
     // CELL是内联对象的情况
-    //if (cell->GetMetaInfo().metatype >= Type_UnknownInline) {
-    //    assert(cell->GetString().length == 1);
+    //if (cell->RefMetaInfo().metatype >= Type_UnknownInline) {
+    //    assert(cell->RefString().length == 1);
     //    assert(!"NOT IMPL");
     //}
 
@@ -1387,7 +1406,7 @@ bool RichED::CEDTextDocument::Private::Insert(
     auto line_ptr = &doc.m_vLogic[dp.line];
     if (!lf_count) {
         const auto len = view.second - view.first;
-        if (len <= cell->GetString().Left()) {
+        if (len <= cell->RefString().Left()) {
             cell->InsertText(pos, view);
             line_ptr->length += len;
             Private::Dirty(doc, *cell, dp.line);
@@ -1428,13 +1447,13 @@ bool RichED::CEDTextDocument::Private::Insert(
     else {
         cell_b = cell->SplitEx(pos);
         if (!cell_b) return false;
-        const_cast<CellMeta&>(cell_b->GetMetaInfo()).metatype = insert_type;
+        const_cast<CellMeta&>(cell_b->RefMetaInfo()).metatype = insert_type;
         cell_a = cell;
     }
     //cells = { cell_a, cell_b };
     // 对其进行插入
-    const auto view1 = detail::nice_view1(view, cell_a->GetString().Left());
-    const auto view2 = detail::nice_view2(view, cell_b->GetString().Left());
+    const auto view1 = detail::nice_view1(view, cell_a->RefString().Left());
+    const auto view2 = detail::nice_view2(view, cell_b->RefString().Left());
 
     line_ptr[0].first = static_cast<CEDTextCell*>(*pointer_to_the_first_at_line);;
     line_ptr[0].length += view1.second - view1.first;
@@ -1457,7 +1476,7 @@ bool RichED::CEDTextDocument::Private::Insert(
                 // 创建CELL
                 const auto obj = RichED::CreateNormalCell(doc, riched);
                 if (!obj) return false;
-                const_cast<CellMeta&>(obj->GetMetaInfo()).metatype = insert_type;
+                const_cast<CellMeta&>(obj->RefMetaInfo()).metatype = insert_type;
                 line_ptr->length += this_end - line_view.first;
                 obj->InsertText(0, { line_view.first, this_end });
                 RichED::InsertAfterFirst(*cell, *obj);
@@ -1496,18 +1515,18 @@ bool RichED::CEDTextDocument::Private::Insert(
     LogicLine& line_data) noexcept {
     // 需要重绘
     RichED::NeedRedraw(doc);
-    assert(obj.GetMetaInfo().eol == false && "cannot insert EOL");
+    assert(obj.RefMetaInfo().eol == false && "cannot insert EOL");
     auto pos = dp.pos;
     auto cell = line_data.first;
     // 遍历到合适的位置
-    while (pos > cell->GetString().length) {
-        pos -= cell->GetString().length;
+    while (pos > cell->RefString().length) {
+        pos -= cell->RefString().length;
         cell = detail::next_cell(cell);
     }
     // 遍历到合适的位置
     detail::find_cell1_txtoff_ex(cell, pos);
     // 必须是正常的
-    assert(pos == 0 || pos == cell->GetString().length || cell->GetMetaInfo().metatype == Type_Normal);
+    assert(pos == 0 || pos == cell->RefString().length || cell->RefMetaInfo().metatype == Type_Normal);
 
     // 插入前面 更新行首
     // 插入后面 添加
@@ -1520,11 +1539,11 @@ bool RichED::CEDTextDocument::Private::Insert(
     auto const next_is_first = line_data.first->prev;
 
     if (pos == 0) insert_after_this = static_cast<CEDTextCell*>(cell->prev);
-    else if (pos < cell->GetString().length) if (!cell->Split(pos)) return false;
+    else if (pos < cell->RefString().length) if (!cell->Split(pos)) return false;
     RichED::InsertAfterFirst(*insert_after_this, obj);
 
     line_data.first = detail::next_cell(next_is_first);
-    line_data.length += obj.GetString().length;
+    line_data.length += obj.RefString().length;
     return true;
 }
 
@@ -1574,9 +1593,9 @@ bool RichED::CEDTextDocument::Private::Remove(
         cell2->prev = cell1;
         // CELL1: 删除[pos1, end)
         // CELL2: 删除[0, pos2)
-        cell1->RemoveTextEx({ pos1, cell1->GetString().length - pos1 });
+        cell1->RemoveTextEx({ pos1, cell1->RefString().length - pos1 });
         // EOL检测
-        const bool delete_eol = cell2->GetMetaInfo().eol && pos2 == cell2->GetString().length;
+        const bool delete_eol = cell2->RefMetaInfo().eol && pos2 == cell2->RefString().length;
         cell2->RemoveTextEx({ 0, pos2 });
         // EOL恢复
         if (delete_eol) {
@@ -1667,9 +1686,9 @@ bool RichED::CEDTextDocument::Private::CheckRange(
             detail::find_cell1_txtoff_ex(cell2, pos2);
             assert(cell1 != cell2 || pos1 != pos2);
             // 删除无效区间
-            if (detail::is_2nd_surrogate(cell1->GetString().data[pos1])) return false;
-            if (pos2 < cell2->GetString().length)
-                if (detail::is_2nd_surrogate(cell2->GetString().data[pos2])) return false;
+            if (detail::is_2nd_surrogate(cell1->RefString().data[pos1])) return false;
+            if (pos2 < cell2->RefString().length)
+                if (detail::is_2nd_surrogate(cell2->RefString().data[pos2])) return false;
             ctx.begin = { cell1, pos1 };
             ctx.end = { cell2, pos2 };
             ctx.line1 = &line_data1;
@@ -1714,7 +1733,7 @@ bool RichED::CEDTextDocument::Private::HitTest(
         ctx.text_cell = static_cast<CEDTextCell*>(last.first->prev);
         ctx.len_before_cell = ctx.visual_line->char_len_before;
         ctx.len_before_cell += ctx.visual_line->char_len_this;
-        ctx.len_in_cell = ctx.text_cell->GetString().length;
+        ctx.len_in_cell = ctx.text_cell->RefString().length;
         ctx.len_before_cell -= ctx.len_in_cell;
         return true;
     }
@@ -1732,7 +1751,7 @@ bool RichED::CEDTextDocument::Private::HitTest(
             target = &cell;
             break;
         }
-        char_offset_in_line += cell.GetString().length;
+        char_offset_in_line += cell.RefString().length;
         offthis -= cell.metrics.width;
     }
     // 进行点击测试
@@ -1808,7 +1827,7 @@ auto RichED::CEDTextDocument::Private::CheckPoint(
 /// <param name="dp">The dp.</param>
 /// <param name="pctx">The PCTX.</param>
 /// <returns></returns>
-void RichED::CEDTextDocument::Private::UpdateCaret(
+void RichED::CEDTextDocument::Private::RefreshCaret(
     CEDTextDocument & doc, DocPoint dp, HitTestCtx * pctx) noexcept {
 
     HitTestCtx ctx;
@@ -1830,6 +1849,96 @@ void RichED::CEDTextDocument::Private::UpdateCaret(
     }
 
     // TODO: 部分情况视口跟随插入符
+}
+
+
+/// <summary>
+/// Updates the selection.
+/// </summary>
+/// <param name="doc">The document.</param>
+/// <param name="begin">The begin.</param>
+/// <param name="end">The end.</param>
+/// <returns></returns>
+void RichED::CEDTextDocument::Private::UpdateSelection(
+    CEDTextDocument& doc, DocPoint begin, DocPoint end) noexcept {
+    CmpSwap(begin, end);
+    // 修改检测
+    const auto pb = Cmp(doc.m_dpSelBegin);
+    const auto cb = Cmp(begin);
+    const auto pe = Cmp(doc.m_dpSelEnd);
+    const auto ce = Cmp(end);
+    if (pb == cb && pe == ce) return;
+    if (pb == pe && cb == ce) return;
+    // 正式修改
+    doc.m_dpSelBegin = begin;
+    doc.m_dpSelEnd = end;
+    Private::RefreshSelection(doc, begin, end);
+    doc.platform.ValueChanged(IEDTextPlatform::Changed_Selection);
+}
+
+/// <summary>
+/// Updates the selection.
+/// </summary>
+/// <param name="doc">The document.</param>
+/// <param name="begin">The begin.</param>
+/// <param name="end">The end.</param>
+/// <returns></returns>
+void RichED::CEDTextDocument::Private::RefreshSelection(
+    CEDTextDocument& doc, DocPoint begin, DocPoint end) noexcept {
+    auto& vec = doc.m_vSelection;
+    vec.Clear();
+    if (Cmp(begin) >= Cmp(end)) return;
+    HitTestCtx bctx, ectx;
+    Private::HitTest(doc, begin, bctx);
+    Private::HitTest(doc, end, ectx);
+    // TODO: 错误处理
+    assert(bctx.text_cell && ectx.text_cell);
+    if (!(bctx.text_cell && ectx.text_cell)) return;
+    // 选择点行末
+    const uint32_t count = ectx.visual_line - bctx.visual_line + 1;
+    // 内存不足: 选择区数据用来显示, 无所谓
+    if (!vec.Resize(count)) return;
+    const auto cell0 = bctx.text_cell;
+    const auto line0 = bctx.visual_line;
+    const auto pos0 = bctx.len_in_cell;
+    const auto cm0 = doc.platform.GetCharMetrics(*cell0, pos0);
+    const auto cell1 = ectx.text_cell;
+    const auto line1 = ectx.visual_line;
+    const auto pos1 = ectx.len_in_cell;
+    const auto cm1 = doc.platform.GetCharMetrics(*cell1, pos1);
+    auto& first = vec[0];
+    auto& last = vec[count - 1];
+    const auto set_height = [](Box& box, const VisualLine& vl) noexcept {
+        box.top = vl.offset;
+        box.bottom = box.top + vl.ar_height_max + vl.dr_height_max;
+    };
+    const auto set_end = [&doc](Box& box, const VisualLine& vl) noexcept {
+        assert(vl.first != &doc.m_tail);
+        const auto last_cell = static_cast<CEDTextCell*>(1[&vl].first->prev);
+        const auto right = last_cell->metrics.pos + last_cell->metrics.width;
+        box.right = right;
+        // 需要选择EOL
+        if (last_cell->RefMetaInfo().eol)
+            box.right += half(last_cell->RefRichED().size);
+    };
+    const auto set_start = [&doc](Box& box, const VisualLine& vl) noexcept {
+        box.left = 0;
+    };
+     // 1. 设置第一行末尾位置, 最后一行行首位置
+    set_end(first, *line0);
+    set_start(last, *line1);
+     // 2. 设置第一行行首位置, 最后一行末尾位置
+    first.left = cell0->metrics.pos + cm0.offset;
+    last.right = cell1->metrics.pos + cm1.offset;
+    set_height(last, *line1);
+     // 3. 中间行设置上一行末尾(需确认EOL), 这一行行首位置
+    auto box_itr = &first;
+    std::for_each(line0, line1, [=](const VisualLine& vl) mutable noexcept {
+        set_end(*box_itr, vl);
+        set_height(*box_itr, vl);
+        ++box_itr;
+        set_start(*box_itr, vl);
+    });
 }
 
 
@@ -1856,22 +1965,22 @@ auto RichED::CEDTextDocument::Private::LogicLeft(
             assert(pos && "BAD ACTION");
             // 遇到注音则移动的到被注音前面(有的话)
             rv = dp; 
-            if (cell->GetMetaInfo().metatype == Type_Ruby) {
+            if (cell->RefMetaInfo().metatype == Type_Ruby) {
                 rv.pos -= pos;
                 while (cell != first_cell) {
                     cell = static_cast<CEDTextCell*>(cell->prev);
-                    if (cell->GetMetaInfo().metatype != Type_Ruby) {
-                        if (cell->GetMetaInfo().metatype == Type_UnderRuby)
-                            rv.pos -= cell->GetString().length;
+                    if (cell->RefMetaInfo().metatype != Type_Ruby) {
+                        if (cell->RefMetaInfo().metatype == Type_UnderRuby)
+                            rv.pos -= cell->RefString().length;
                         break;
                     }
-                    rv.pos -= cell->GetString().length;
+                    rv.pos -= cell->RefString().length;
                 }
             }
             // 否则检查UTF16规则, 避免移动到错误地点
             else {
                 --rv.pos;
-                if (detail::is_2nd_surrogate(cell->GetString().data[pos - 1])) --rv.pos;
+                if (detail::is_2nd_surrogate(cell->RefString().data[pos - 1])) --rv.pos;
             }
         }
         // 处于行首
@@ -1910,19 +2019,19 @@ auto RichED::CEDTextDocument::Private::LogicRight(
             rv = dp;
             detail::find_cell2_txtoff_ex(cell, pos);
             // 遇到被注音则移动的到注音后面(有的话)
-            if (cell->GetMetaInfo().metatype == Type_UnderRuby) {
-                rv.pos += cell->GetString().length - pos;
-                while (!cell->GetMetaInfo().eol) {
+            if (cell->RefMetaInfo().metatype == Type_UnderRuby) {
+                rv.pos += cell->RefString().length - pos;
+                while (!cell->RefMetaInfo().eol) {
                     cell = detail::next_cell(cell);
-                    if (cell->GetMetaInfo().metatype != Type_Ruby) break;
-                    rv.pos += cell->GetString().length;
+                    if (cell->RefMetaInfo().metatype != Type_Ruby) break;
+                    rv.pos += cell->RefString().length;
                 }
             }
             // 否则检查UTF16规则, 避免移动到错误地点
             else {
-                assert(pos < cell->GetString().length && "BAD ACTION");
+                assert(pos < cell->RefString().length && "BAD ACTION");
                 ++rv.pos;
-                if (detail::is_1st_surrogate(cell->GetString().data[pos])) ++rv.pos;
+                if (detail::is_1st_surrogate(cell->RefString().data[pos])) ++rv.pos;
             }
         }
     }

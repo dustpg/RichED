@@ -95,12 +95,14 @@ namespace RichED {
         void Resize(Size) noexcept;
         // get logic line count 
         auto GetLogicLineCount() const noexcept { return m_vLogic.GetSize(); }
+        // get selection
+        auto&RefSelection() const noexcept { return m_vSelection; }
         // get caret rect under doc space
         auto GetCaret() const noexcept { return m_rcCaret; };
         // get line feed data
-        auto&GetLineFeed() const noexcept { return m_linefeed; }
+        auto&RefLineFeed() const noexcept { return m_linefeed; }
         // get info
-        auto&GetInfo() const noexcept { return m_info; }
+        auto&RefInfo() const noexcept { return m_info; }
         // set new line feed
         void SetLineFeed(LineFeed) noexcept;
         // set new wrap mode
@@ -202,6 +204,10 @@ namespace RichED {
         DocPoint                m_dpAnchor;
         // caret pos
         DocPoint                m_dpCaret;
+        // selection begin
+        DocPoint                m_dpSelBegin;
+        // selection end
+        DocPoint                m_dpSelEnd;
         // head
         Node                    m_head;
         // tail
@@ -214,5 +220,7 @@ namespace RichED {
         CEDBuffer<VisualLine>   m_vVisual;
         // logic line data
         CEDBuffer<LogicLine>    m_vLogic;
+        // selection data
+        CEDBuffer<Box>         m_vSelection;
     };
 }
