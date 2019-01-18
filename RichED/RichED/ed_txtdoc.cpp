@@ -269,10 +269,12 @@ namespace RichED {
         // pos: before cell
         uint32_t            len_before_cell;
         // pos: in cell
-        uint32_t            len_in_cell;
+        uint32_t            pos_in_cell;
     };
     // priavate impl for CEDTextDocument
     struct CEDTextDocument::Private {
+        // mouse
+        static bool Mouse(CEDTextDocument& doc, Point, bool hold) noexcept;
         // hit doc from position
         static bool HitTest(CEDTextDocument& doc, Point, HitTestCtx&) noexcept;
         // hit doc from doc point
@@ -623,23 +625,42 @@ void RichED::CEDTextDocument::VAlignHelperH(unit_t ar, unit_t height, CellMetric
 //                                GUI Operation
 // ----------------------------------------------------------------------------
 
+
+/// <summary>
+/// Mouses the specified document.
+/// </summary>
+/// <param name="doc">The document.</param>
+/// <param name="pt">The pt.</param>
+/// <param name="hold">if set to <c>true</c> [hold].</param>
+/// <returns></returns>
+bool RichED::CEDTextDocument::Private::Mouse(
+    CEDTextDocument & doc, Point pt, bool hold) noexcept{
+    HitTestCtx ctx;
+    // TODO: 屏幕坐标空间映射到文档坐标空间
+
+    // 针对鼠标位置的命中测试
+    if (Private::HitTest(doc, pt, ctx)) {
+        const DocPoint dp {
+            ctx.visual_line->lineno,
+            ctx.len_before_cell + ctx.pos_in_cell
+        };
+        // 设置选择
+        Private::SetSelection(doc, &ctx, dp, impl::mode_target, hold);
+        // 更新选择区域
+        Private::UpdateSelection(doc, doc.m_dpCaret, doc.m_dpAnchor);
+        return true;
+    }
+    return true;
+}
+
 /// <summary>
 /// GUIs the l button up.
 /// </summary>
 /// <param name="pt">The pt.</param>
 /// <returns></returns>
-bool RichED::CEDTextDocument::GuiLButtonUp(Point pt) noexcept {
-    HitTestCtx ctx;
-    if (Private::HitTest(*this, pt, ctx)) {
-        const DocPoint dp{
-            ctx.visual_line->lineno, 
-            ctx.len_before_cell + ctx.len_in_cell
-        };
-        Private::SetSelection(*this, &ctx, dp, impl::mode_target, false);
-        return true;
-    }
-    return false;
-}
+//bool RichED::CEDTextDocument::GuiLButtonUp(Point pt) noexcept {
+//    return false;
+//}
 
 /// <summary>
 /// GUIs the l button down.
@@ -648,7 +669,7 @@ bool RichED::CEDTextDocument::GuiLButtonUp(Point pt) noexcept {
 /// <param name="shift">if set to <c>true</c> [shift].</param>
 /// <returns></returns>
 bool RichED::CEDTextDocument::GuiLButtonDown(Point pt, bool shift) noexcept {
-    return true;
+    return Private::Mouse(*this, pt, false);
 }
 
 /// <summary>
@@ -657,7 +678,7 @@ bool RichED::CEDTextDocument::GuiLButtonDown(Point pt, bool shift) noexcept {
 /// <param name="pt">The pt.</param>
 /// <returns></returns>
 bool RichED::CEDTextDocument::GuiLButtonHold(Point pt) noexcept {
-    return true;
+    return Private::Mouse(*this, pt, true);
 }
 
 /// <summary>
@@ -688,7 +709,11 @@ bool RichED::CEDTextDocument::GuiText(U16View view) noexcept {
     // 插入
     this->InsertText(m_dpCaret, view, true);
     // 计算距离
+    this->BeforeRender();
+
     const auto move = detail::lfcount(view);
+
+
     Private::SetSelection(*this, nullptr, move, impl::mode_rightchar, false);
 
     return true;
@@ -707,6 +732,9 @@ bool RichED::CEDTextDocument::GuiBackspace(bool ctrl) noexcept {
     if (Cmp(after) == Cmp(m_dpCaret)) return false;
     // 删除
     this->RemoveText(after, m_dpCaret);
+
+    this->BeforeRender();
+
     // 设置
     Private::SetSelection(*this, nullptr, after, impl::mode_target, false);
 
@@ -1343,8 +1371,8 @@ bool RichED::CEDTextDocument::Private::Insert(
     }
     // 插在后面
     else {
-        // BEHIND模式
-        if (behind) {
+        // BEHIND模式[EOL不算数]
+        if (behind && !cell->RefMetaInfo().eol) {
             // 插入最后面
             if (cell->next == &doc.m_tail) {
                 const auto obj = RichED::CreateNormalCell(doc, doc.default_riched);
@@ -1576,9 +1604,13 @@ bool RichED::CEDTextDocument::Private::Remove(
     Private::Dirty(doc, *cell1, begin.line);
     // 处理
     const auto cell2_next = detail::next_cell(cell2);
+    bool delete_eol = false;
     // 删除的是同一个CELL
     if (cell1 == cell2) {
+        const auto prev_cell1 = cell1->prev;
+        delete_eol = cell1->RefMetaInfo().eol;
         cell1->RemoveTextEx({ pos1, pos2 - pos1 });
+        delete_eol = delete_eol && prev_cell1->next != cell1;
     }
     else {
         // 直接释放(CELL1, CELL2)
@@ -1595,23 +1627,25 @@ bool RichED::CEDTextDocument::Private::Remove(
         // CELL2: 删除[0, pos2)
         cell1->RemoveTextEx({ pos1, cell1->RefString().length - pos1 });
         // EOL检测
-        const bool delete_eol = cell2->RefMetaInfo().eol && pos2 == cell2->RefString().length;
+        delete_eol = cell2->RefMetaInfo().eol && pos2 == cell2->RefString().length;
         cell2->RemoveTextEx({ 0, pos2 });
-        // EOL恢复
-        if (delete_eol) {
-            auto node = static_cast<CEDTextCell*>(cell2_next->prev);
-            // 从头删除
-            if (begin.pos == 0) {
-                // 重新创建一个CELL作为
-                const auto ptr = RichED::CreateNormalCell(doc, doc.default_riched);
-                // TODO: 错误处理
-                if (!ptr) return false;
-                RichED::InsertAfterFirst(*node, *ptr);
-                node = ptr;
-            }
-            node->AsEOL();
-        }
     }
+
+    // EOL恢复
+    if (delete_eol) {
+        auto node = static_cast<CEDTextCell*>(cell2_next->prev);
+        // 从头删除
+        if (begin.pos == 0) {
+            // 重新创建一个CELL作为
+            const auto ptr = RichED::CreateNormalCell(doc, doc.default_riched);
+            // TODO: 错误处理
+            if (!ptr) return false;
+            RichED::InsertAfterFirst(*node, *ptr);
+            node = ptr;
+        }
+        node->AsEOL();
+    }
+
     // 长度计算: line_data1可能与line_data2一致(大概率, 同一行修改)
     const auto old_len2 = line_data2.length;
     line_data1.length = begin.pos;
@@ -1733,32 +1767,58 @@ bool RichED::CEDTextDocument::Private::HitTest(
         ctx.text_cell = static_cast<CEDTextCell*>(last.first->prev);
         ctx.len_before_cell = ctx.visual_line->char_len_before;
         ctx.len_before_cell += ctx.visual_line->char_len_this;
-        ctx.len_in_cell = ctx.text_cell->RefString().length;
-        ctx.len_before_cell -= ctx.len_in_cell;
+        ctx.pos_in_cell = ctx.text_cell->RefString().length;
+        ctx.len_before_cell -= ctx.pos_in_cell;
         return true;
     }
     // 获取指定信息
     const auto& line0 = itr[offset];
     ctx.visual_line = &line0;
-    uint32_t char_offset_in_line = line0.char_len_before;
     const auto& line1 = itr[offset + 1];
-    unit_t offthis = pos.x;
-    const auto cfor = detail::cfor_cells(line0.first, line1.first);
-    auto target = static_cast<CEDTextCell*>(line1.first->prev);
-    // 遍历到指定位置
-    for (auto& cell : cfor) {
-        if (offthis < cell.metrics.width) {
-            target = &cell;
-            break;
-        }
-        char_offset_in_line += cell.RefString().length;
-        offthis -= cell.metrics.width;
+    const auto last = static_cast<CEDTextCell*>(line1.first->prev);
+    CEDTextCell* target = nullptr;
+    // 过长
+    if (pos.x >= last->metrics.pos + last->metrics.width) {
+        ctx.text_cell = last;
+        ctx.pos_in_cell = last->RefString().length;
+        ctx.len_before_cell 
+            = line0.char_len_before + line0.char_len_this 
+            - ctx.pos_in_cell
+            ;
     }
-    // 进行点击测试
-    const auto ht = doc.platform.HitTest(*target, offthis);
-    ctx.text_cell = target;
-    ctx.len_before_cell = char_offset_in_line;
-    ctx.len_in_cell = ht.pos + ht.trailing * ht.length;
+    // 遍历到指定位置
+    else {
+        unit_t offthis = pos.x;
+        uint32_t char_offset_in_line = line0.char_len_before;
+        const auto cfor = detail::cfor_cells(line0.first, last);
+        auto target = last;
+        for (auto& cell : cfor) {
+            if (offthis < cell.metrics.width
+#ifndef RED_NO_RUBY
+                && cell.metrics.width) {
+                // 注音的特殊处理  开始
+                if (cell.RefMetaInfo().metatype == Type_UnderRuby) {
+                    // 在后面一半
+                    if (offthis >= half(cell.metrics.width)) {
+                        char_offset_in_line += cell.RefString().length;
+                        offthis -= cell.metrics.width;
+                        continue;
+                    }
+                }
+                // 注音的特殊处理  结束
+#else
+                ) {
+#endif
+                target = &cell; break;
+            }
+            char_offset_in_line += cell.RefString().length;
+            offthis -= cell.metrics.width;
+        }
+        const auto ht = doc.platform.HitTest(*target, offthis);
+        ctx.text_cell = target;
+        ctx.len_before_cell = char_offset_in_line;
+        ctx.pos_in_cell = ht.pos + ht.trailing * ht.length;
+    }
     return true;
 }
 
@@ -1771,6 +1831,7 @@ bool RichED::CEDTextDocument::Private::HitTest(
 /// <returns></returns>
 void RichED::CEDTextDocument::Private::HitTest(
     CEDTextDocument& doc, DocPoint dp, HitTestCtx& ctx) noexcept {
+    const auto dp_bk = dp;
     ctx.text_cell = nullptr;
     // 二分查找到指定行
     auto& vlv = doc.m_vVisual;
@@ -1793,7 +1854,7 @@ void RichED::CEDTextDocument::Private::HitTest(
         detail::find_cell1_txtoff_ex(cell, pos);
         ctx.visual_line = itr;
         ctx.len_before_cell += dp.pos - pos;
-        ctx.len_in_cell = pos;
+        ctx.pos_in_cell = pos;
         ctx.text_cell = cell;
     }
 }
@@ -1836,7 +1897,7 @@ void RichED::CEDTextDocument::Private::RefreshCaret(
     // 修改插入符位置
     if (ctx.text_cell) {
         auto& cell = *ctx.text_cell;
-        const auto pos = ctx.len_in_cell;
+        const auto pos = ctx.pos_in_cell;
         const auto cm = doc.platform.GetCharMetrics(cell, pos);
         // TODO: 固定行高
         doc.m_rcCaret.x = cell.metrics.pos + cm.offset;
@@ -1900,11 +1961,11 @@ void RichED::CEDTextDocument::Private::RefreshSelection(
     if (!vec.Resize(count)) return;
     const auto cell0 = bctx.text_cell;
     const auto line0 = bctx.visual_line;
-    const auto pos0 = bctx.len_in_cell;
+    const auto pos0 = bctx.pos_in_cell;
     const auto cm0 = doc.platform.GetCharMetrics(*cell0, pos0);
     const auto cell1 = ectx.text_cell;
     const auto line1 = ectx.visual_line;
-    const auto pos1 = ectx.len_in_cell;
+    const auto pos1 = ectx.pos_in_cell;
     const auto cm1 = doc.platform.GetCharMetrics(*cell1, pos1);
     auto& first = vec[0];
     auto& last = vec[count - 1];

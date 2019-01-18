@@ -22,7 +22,7 @@ enum { WINDOW_WIDTH = 1280, WINDOW_HEIGHT = 720 };
 static const wchar_t WINDOW_TITLE[] = L"RichED - DWnD2D";
 enum { ECODE_FAILED = -1, ECODE_OOM = -2, ECODE_DRAW = -3, ECODE_RESIZE = -4 };
 
-enum { DEF_FONT_SIZE = 32 };
+enum { DEF_FONT_SIZE = 20 };
 
 enum { CTRL_X = 100, CTRL_Y = 100,  };
 
@@ -130,6 +130,7 @@ struct WinDWnD2D final : IEDTextPlatform {
     uint32_t        caret_blink_i = 0;
     uint32_t        caret_blink_time = 500;
     char16_t        save_u16 = 0;
+    bool            click_in_area = false;
 
     // doc
     std::aligned_storage<sizeof(CEDTextDocument), alignof(CEDTextDocument)>
@@ -384,24 +385,26 @@ LRESULT WinDWnD2D::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
     case WM_MOUSEMOVE:
         x = int16_t(LOWORD(lParam)) - CTRL_X;
         y = int16_t(HIWORD(lParam)) - CTRL_Y;
-        if (wParam & MK_LBUTTON) {
+        if (g_platform.click_in_area && wParam & MK_LBUTTON) {
             g_platform.Doc().GuiLButtonHold({ (float)x, (float)y });
         }
         break;
     case WM_LBUTTONDOWN:
         x = int16_t(LOWORD(lParam)) - CTRL_X;
         y = int16_t(HIWORD(lParam)) - CTRL_Y;
+        g_platform.click_in_area = false;
         if (x >= 0 && y >= 0 && x < int16_t(ctrl_w) && y < int16_t(ctrl_h)) {
+            g_platform.click_in_area = true;
             g_platform.Doc().GuiLButtonDown({ (float)x, (float)y }, !!(wParam & MK_SHIFT));
         }
         break;
-    case WM_LBUTTONUP:
-        x = int16_t(LOWORD(lParam)) - CTRL_X;
-        y = int16_t(HIWORD(lParam)) - CTRL_Y;
-        if (x >= 0 && y >= 0 && x < int16_t(ctrl_w) && y < int16_t(ctrl_h)) {
-            g_platform.Doc().GuiLButtonUp({ (float)x, (float)y });
-        }
-        break;
+    //case WM_LBUTTONUP:
+    //    x = int16_t(LOWORD(lParam)) - CTRL_X;
+    //    y = int16_t(HIWORD(lParam)) - CTRL_Y;
+    //    if (x >= 0 && y >= 0 && x < int16_t(ctrl_w) && y < int16_t(ctrl_h)) {
+    //        g_platform.Doc().GuiLButtonUp({ (float)x, (float)y });
+    //    }
+    //    break;
     case WM_CHAR:
 
         ch = static_cast<char32_t>(wParam);
@@ -565,7 +568,7 @@ void WinDWnD2D::RecreateContext(CEDTextCell& cell) noexcept {
             hr = layout->GetLineMetrics(&dwlm, 1, &count);
         }
         if (SUCCEEDED(hr)) {
-            cell.metrics.width = dwtm.width;
+            cell.metrics.width = dwtm.widthIncludingTrailingWhitespace;
             this->Doc().VAlignHelperH(dwlm.baseline, dwlm.height, cell.metrics);
             cell.metrics.bounding.left = -dwom.left;
             cell.metrics.bounding.top = -dwom.top;

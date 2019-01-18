@@ -145,7 +145,7 @@ namespace RichED {
             return set_flags(begin, end, FFlags_Italic, set | set_fflags); }
     public: // GUI Operation, return false on gui-level mistake
         // gui: l-button up
-        bool GuiLButtonUp(Point pt) noexcept;
+        //bool GuiLButtonUp(Point pt) noexcept;
         // gui: l-button down
         bool GuiLButtonDown(Point pt, bool shift) noexcept;
         // gui: l-button hold&move
