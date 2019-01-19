@@ -46,6 +46,8 @@ namespace RichED {
         void Sleep() noexcept;
         // get string data
         auto&RefString() const noexcept { return m_string; }
+        // get string view
+        auto View() const noexcept { return U16View{ m_string.data, m_string.data + m_string.length }; }
         // get meta info
         auto&RefMetaInfo() const noexcept { return m_meta; }
         // get logic length
@@ -60,6 +62,8 @@ namespace RichED {
         void AsDirty() noexcept { m_meta.dirty = true; }
         // eol!
         void AsEOL() noexcept { m_meta.eol = true; }
+        // !eol
+        void ClearEOL() noexcept { m_meta.eol = false; }
     public:
         // split to 2 cells, return this if pos == 0, return next if pos >= len
         auto Split(uint32_t pos) noexcept->CEDTextCell*;

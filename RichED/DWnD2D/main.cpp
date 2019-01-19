@@ -22,7 +22,7 @@ enum { WINDOW_WIDTH = 1280, WINDOW_HEIGHT = 720 };
 static const wchar_t WINDOW_TITLE[] = L"RichED - DWnD2D";
 enum { ECODE_FAILED = -1, ECODE_OOM = -2, ECODE_DRAW = -3, ECODE_RESIZE = -4 };
 
-enum { DEF_FONT_SIZE = 20 };
+enum { DEF_FONT_SIZE = 24 };
 
 enum { CTRL_X = 100, CTRL_Y = 100,  };
 
@@ -80,6 +80,8 @@ struct DWnD2DDataField {
     ID2D1HwndRenderTarget*  d2d_rendertarget;
 };
 
+constexpr char16_t IME_BUF_LEN = 68;
+
 struct WinDWnD2D final : IEDTextPlatform {
     // ctor
     WinDWnD2D() noexcept {}
@@ -89,8 +91,8 @@ struct WinDWnD2D final : IEDTextPlatform {
     void ValueChanged(Changed) noexcept override;
     // is valid password
     bool IsValidPassword(char32_t ch) noexcept override { return ch < 128; }
-    // generate text
-    void GenerateText(void* string, U16View view) noexcept override {
+    // append text
+    void AppendText(void* string, U16View view) noexcept override {
         auto& obj = *reinterpret_cast<std::u16string*>(string);
         try { obj.append(view.first, view.second); }
         catch (...) {}
@@ -126,11 +128,15 @@ struct WinDWnD2D final : IEDTextPlatform {
     void DrawSelection() noexcept;
 
 
-    uint32_t        cell_draw_i = 0;
-    uint32_t        caret_blink_i = 0;
+    uint32_t        cell_draw_i     = 0;
+    uint32_t        caret_blink_i   = 0;
     uint32_t        caret_blink_time = 500;
-    char16_t        save_u16 = 0;
-    bool            click_in_area = false;
+    char16_t        save_u16        = 0;
+    uint16_t        ime_char_count  = 0;
+    uint16_t        ime_char_index  = 0;
+    bool            click_in_area   = false;
+    bool            unused          = false;
+    char16_t        ime_buf[IME_BUF_LEN];
 
     // doc
     std::aligned_storage<sizeof(CEDTextDocument), alignof(CEDTextDocument)>
@@ -356,6 +362,11 @@ LRESULT WinDWnD2D::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
         assert(is_low_surrogate(trail) && "illegal utf-16 char");
         return (char32_t)((lead - 0xD800) << 10 | (trail - 0xDC00)) + (0x10000);
     };
+    const auto msg_box_text = [hwnd](DocPoint a, DocPoint b) noexcept {
+        std::wstring str;
+        g_platform.Doc().GenText(&str, a, b);
+        ::MessageBoxW(hwnd, str.c_str(), L"<GenText>", MB_OK);
+    };
 
     bool handled = false;
     LRESULT result = 0;
@@ -364,7 +375,7 @@ LRESULT WinDWnD2D::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
         bool ctrl, shift;
         int16_t x, y;
         PAINTSTRUCT ps;
-        char32_t ch;
+        DocRange dr;
     case WM_SIZE:
         g_platform.Resize(LOWORD(lParam), HIWORD(lParam));
         handled = true;
@@ -405,18 +416,38 @@ LRESULT WinDWnD2D::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
     //        g_platform.Doc().GuiLButtonUp({ (float)x, (float)y });
     //    }
     //    break;
+    case WM_IME_CHAR:
+        // 针对IME输入的优化
+        ++g_platform.ime_char_count;
+        break;
     case WM_CHAR:
-
-        ch = static_cast<char32_t>(wParam);
-        if (is_low_surrogate(char16_t(wParam))) {
-            ch = char16x2_to_char32(g_platform.save_u16, char16_t(wParam));
+        // 针对IME输入的优化
+        if (g_platform.ime_char_count) {
+            auto& index = g_platform.ime_char_index;
+            const auto buf = g_platform.ime_buf;
+            buf[index++] = char16_t(wParam);
+            if (index == g_platform.ime_char_count || 
+                index == IME_BUF_LEN ||
+                (index == IME_BUF_LEN - 1 && is_low_surrogate(char16_t(wParam)) )) {
+                g_platform.ime_char_count -= index;
+                const U16View view{ buf, buf + index };
+                index = 0;
+                g_platform.Doc().GuiText(view);
+            }
         }
-        else if (is_high_surrogate(char16_t(wParam))) {
-            g_platform.save_u16 = char16_t(wParam);
-            break;
+        // 单个输入
+        else {
+            char32_t ch = static_cast<char32_t>(wParam);
+            if (is_low_surrogate(char16_t(wParam))) {
+                ch = char16x2_to_char32(g_platform.save_u16, char16_t(wParam));
+            }
+            else if (is_high_surrogate(char16_t(wParam))) {
+                g_platform.save_u16 = char16_t(wParam);
+                break;
+            }
+            // 有效字符:  \b 之类的控制符不算
+            if (ch >= 0x20 || ch == '\t') g_platform.Doc().GuiChar(ch);
         }
-        // 有效字符:  \b 之类的控制符不算
-        if (ch >= 0x20 || ch == '\t') g_platform.Doc().GuiChar(ch);
         break;
     case WM_KEYDOWN:
         handled = true;
@@ -427,6 +458,13 @@ LRESULT WinDWnD2D::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
         {
         default:
             handled = false;
+            break;
+        case 'A':
+            // Ctrl + A
+            if (ctrl)  g_platform.Doc().GuiSelectAll();
+            break;
+        case VK_RETURN:
+            g_platform.Doc().GuiReturn();
             break;
         case VK_LEFT:
             g_platform.Doc().GuiLeft(ctrl, shift);
@@ -440,15 +478,24 @@ LRESULT WinDWnD2D::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
         case VK_DOWN:
             g_platform.Doc().GuiDown(ctrl, shift);
             break;
-        //case 'P':
-        //    g_platform.Doc().InsertText({ 0, 1000 }, u"red \nblur"_red);
-        //    break;
+            //case 'P':
+            //    g_platform.Doc().InsertText({ 0, 1000 }, u"red \nblur"_red);
+            //    break;
         case VK_BACK:
             g_platform.Doc().GuiBackspace(ctrl);
             break;
         case VK_DELETE:
             g_platform.Doc().GuiDelete(ctrl);
             break;
+    //    }
+    //    break;
+    //case WM_SYSKEYDOWN:
+    //    handled = true;
+    //    switch (wParam)
+    //    {
+    //    default:
+    //        handled = false;
+    //        break;
         case VK_F1:
             g_platform.Doc().SetFontSize({ 0, 7 }, { 0, 8 }, 20.f);
             break;
@@ -472,6 +519,15 @@ LRESULT WinDWnD2D::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
                 //ctrl_h -= 10.f;
                 g_platform.Doc().Resize({ ctrl_w, ctrl_h });
             }
+            break;
+        case VK_F9:
+            dr = g_platform.Doc().GetSelectionRange();
+            if (dr.begin.line != dr.end.line || dr.begin.pos != dr.end.pos) {
+                msg_box_text(dr.begin, dr.end);
+            }
+            break;
+        case VK_F11:
+            msg_box_text({}, { g_platform.Doc().GetLogicLineCount() });
             break;
         }
         break;

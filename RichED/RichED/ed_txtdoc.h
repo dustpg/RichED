@@ -93,6 +93,8 @@ namespace RichED {
         void SetPos(Point) noexcept;
         // resize doc view-zone
         void Resize(Size) noexcept;
+        // gen text
+        void GenText(void* str, DocPoint begin, DocPoint end)noexcept;
         // get logic line count 
         auto GetLogicLineCount() const noexcept { return m_vLogic.GetSize(); }
         // get selection
@@ -107,6 +109,8 @@ namespace RichED {
         void SetLineFeed(LineFeed) noexcept;
         // set new wrap mode
         //void SetWrapMode(WrapMode) noexcept;
+        // get selection
+        auto GetSelectionRange() const noexcept { return DocRange{ m_dpSelBegin, m_dpSelEnd }; }
     public:
         // begin an operation for undo-stack
         void BeginOP() noexcept;

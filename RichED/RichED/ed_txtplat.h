@@ -54,8 +54,8 @@ namespace RichED {
         virtual void ValueChanged(Changed) noexcept = 0;
         // is valid password
         virtual bool IsValidPassword(char32_t) noexcept = 0;
-        // generate text
-        virtual void GenerateText(void* string, U16View view) noexcept = 0;
+        // append text
+        virtual void AppendText(void* string, U16View view) noexcept = 0;
         // recreate context [split?]
         virtual void RecreateContext(CEDTextCell& cell) noexcept = 0;
         // delete context
