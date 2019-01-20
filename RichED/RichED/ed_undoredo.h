@@ -28,19 +28,23 @@
 #include <cstdint>
 #include "ed_common.h"
 
+
+
 namespace RichED {
-    // text platform
-    struct IEDTextPlatform;
+    // text doc
+    struct CEDTextDocument;
     // Trivial UndoRedo data, no CTOR/DTOR
     struct TrivialUndoRedo : Node {
         // undo
-        void(*undo)(TrivialUndoRedo*) noexcept;
+        void(*undo)(CEDTextDocument&, TrivialUndoRedo&) noexcept;
         // redo
-        void(*redo)(TrivialUndoRedo*) noexcept;
+        void(*redo)(CEDTextDocument&, TrivialUndoRedo&) noexcept;
+        // byte length from here
+        RED_RICHED_ALIGNED uint32_t bytes_from_here;
         // type
-        uint16_t            type;
+        uint16_t                    type;
         // decorator
-        uint16_t            decorator;
+        uint16_t                    decorator;
     };
     // undo redo 
     class CEDUndoRedo {

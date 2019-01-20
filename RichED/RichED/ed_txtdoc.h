@@ -176,6 +176,10 @@ namespace RichED {
         bool GuiHome(bool ctrl, bool shift) noexcept;
         // gui: end
         bool GuiEnd(bool ctrl, bool shift) noexcept;
+        // gui: page up
+        bool GuiPageUp(bool ctrl, bool shift) noexcept;
+        // gui: page down
+        bool GuiPageDown(bool ctrl, bool shift) noexcept;
         // gui: select all
         bool GuiSelectAll() noexcept;
         // gui: undo
@@ -194,6 +198,8 @@ namespace RichED {
         // default riched
         RichData                default_riched;
     private:
+        // matrix
+        DocMatrix               m_matrix;
         // normal info
         DocInfo                 m_info;
         // linefeed data
@@ -212,6 +218,10 @@ namespace RichED {
         DocPoint                m_dpSelBegin;
         // selection end
         DocPoint                m_dpSelEnd;
+        // undo op
+        uint16_t                m_uUndoOp = 0;
+        // unused
+        uint16_t                m_unused_16x3[3];
         // head
         Node                    m_head;
         // tail
@@ -225,6 +235,6 @@ namespace RichED {
         // logic line data
         CEDBuffer<LogicLine>    m_vLogic;
         // selection data
-        CEDBuffer<Box>         m_vSelection;
+        CEDBuffer<Box>          m_vSelection;
     };
 }

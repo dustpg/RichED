@@ -4,6 +4,7 @@
 
 // x86 CPU cache-line = 64
 #define RED_LUT_ALIGNED alignas(64)
+#define RED_RICHED_ALIGNED alignas(8)
 
 #ifndef PCN_NOVTABLE
 #ifdef _MSC_VER

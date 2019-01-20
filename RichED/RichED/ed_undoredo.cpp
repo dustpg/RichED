@@ -38,5 +38,41 @@ void RichED::CEDUndoRedo::Clear() noexcept {
 }
 
 // ----------------------------------------------------------------------------
-//                                 impl
+//                               Ruby Char Insert
 // ----------------------------------------------------------------------------
+
+namespace RichED {
+    // singe op for ruby
+    struct RubySingeOp {
+        // under riched
+        RichData        under;
+        // ruby riched
+        RichData        ruby;
+        // point
+        DocPoint        point;
+        // length of ruby
+        uint32_t        ruby_length;
+        // under char
+        char16_t        under_char[2];
+        // ruby char
+        char16_t        ruby_char[2];
+    };
+}
+
+// ----------------------------------------------------------------------------
+//                             RichED Append
+// ----------------------------------------------------------------------------
+
+
+namespace RichED {
+    // singe op for rich
+    struct RichSingeOp {
+        // under riched
+        RichData        riched;
+        // begin point
+        DocPoint        begin;
+        // end point
+        DocPoint        end;
+    };
+    // 
+}

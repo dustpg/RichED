@@ -1,20 +1,10 @@
-﻿#include "../RichED/ed_txtplat.h"
-#include "../RichED/ed_txtdoc.h"
-#include "../RichED/ed_txtcell.h"
+﻿#include "common.h"
 
-// windows
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
-#include <windows.h>
-#include <minwindef.h>
+// DWnD2D
 #include <d2d1_1.h>
 #include <dwrite_1.h>
 #pragma comment(lib, "d2d1.lib")
 #pragma comment(lib, "dwrite.lib")
-
-// c++
-#include <string>
-#include <vector>
 
 
 
@@ -35,35 +25,6 @@ static const wchar_t* const FONT_NAME_LIST[] = {
      L"SimSun",
 };
 
-
-
-
-struct MemoryLeakDetector {
-#if !defined(NDEBUG) && defined(_MSC_VER)
-    // mem state
-    _CrtMemState memstate[3];
-    // ctor
-    MemoryLeakDetector() noexcept { ::_CrtMemCheckpoint(memstate + 0); }
-    // dtor
-    ~MemoryLeakDetector() noexcept {
-        ::_CrtMemCheckpoint(memstate + 1);
-        if (::_CrtMemDifference(memstate + 2, memstate + 0, memstate + 1)) {
-            ::_CrtDumpMemoryLeaks();
-            assert(!"OOps! Memory leak detected");
-        }
-    }
-#else
-    ~MemoryLeakDetector() noexcept {}
-#endif
-};
-
-
-using namespace RichED;
-
-
-inline U16View operator""_red(const char16_t* str, size_t len) noexcept {
-    return { str, str + len };
-}
 
 
 struct DWnD2DDataField {
@@ -244,24 +205,12 @@ bool WinDWnD2D::Init(HWND hwnd) noexcept {
     }
     // 初文字
     if (SUCCEEDED(hr)) {
-        const auto string = u"Hello, world!\r\n泥壕世界!\r\nHello, world!"_red;
-        //this->Doc().InsertText({ 0, 0 }, string);
-        //this->Doc().InsertRuby({ 0, 1 }, U'汉', u"hàn"_red);
-        //this->Doc().InsertRuby({ 0, 1 }, U'漢', u"かん"_red);
-        //this->Doc().InsertText({ 0, 4 }, u"kankankan"_red);
-        //this->Doc().InsertText({ 0, 0 }, u"汉hàn"_red);
-
-        //for (int i = 0; i != 12; ++i)
-            //this->Doc().InsertText({ 0, 0 }, u"汉"_red);
-        //this->Doc().InsertText({ 0, 0 }, u"汉\n"_red);
-            //this->Doc().InsertRuby({ 0, 0 }, U'汉', u"hàn"_red);
-
-
         this->Doc().InsertText({ 0, 0 }, u"国人发明的"_red);
         this->Doc().InsertRuby({ 0, 0 }, U'韩', u"宇宙"_red);
         this->Doc().InsertText({ 0, 0 }, u"字没准儿是"_red);
         //this->Doc().InsertText({ 0, 0 }, u"😂😂😂😂😂"_red);
         this->Doc().InsertRuby({ 0, 0 }, U'汉', u"hàn"_red);
+        this->Doc().InsertText({ 0, 0 }, u"Hello, World!\r\n泥壕世界!\n"_red);
     }
     // 创建DWrite工厂
     if (SUCCEEDED(hr)) {
@@ -372,7 +321,7 @@ LRESULT WinDWnD2D::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
     LRESULT result = 0;
     switch (message)
     {
-        bool ctrl, shift;
+        bool ctrl, shift, gui_op;
         int16_t x, y;
         PAINTSTRUCT ps;
         DocRange dr;
@@ -451,6 +400,7 @@ LRESULT WinDWnD2D::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
         break;
     case WM_KEYDOWN:
         handled = true;
+        gui_op = true;
         result = 0;
         ctrl = (::GetKeyState(VK_CONTROL) & 0x80) != 0;
         shift = (::GetKeyState(VK_SHIFT) & 0x80) != 0;
@@ -461,31 +411,72 @@ LRESULT WinDWnD2D::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
             break;
         case 'A':
             // Ctrl + A
-            if (ctrl)  g_platform.Doc().GuiSelectAll();
+            if (ctrl)  gui_op = g_platform.Doc().GuiSelectAll();
+            break;
+        case 'Z':
+            // Ctrl + Z
+            if (ctrl)  gui_op = g_platform.Doc().GuiUndo();
+            break;
+        case 'Y':
+            // Ctrl + Y
+            if (ctrl)  gui_op = g_platform.Doc().GuiRedo();
+            break;
+        case 'X':
+        case 'C':
+            // Ctrl + C
+            if (ctrl) {
+                dr = g_platform.Doc().GetSelectionRange();
+                if (dr.begin.line != dr.end.line || dr.begin.pos != dr.end.pos) {
+                    std::wstring str;
+                    g_platform.Doc().GenText(&str, dr.begin, dr.end);
+                    ::CopyTextToClipboard(str);
+                    // 删除选择区
+                    if (wParam == 'X') gui_op = g_platform.Doc().GuiDelete(false);
+                }
+            }
+            break;
+        case 'V':
+            // Ctrl + V
+            if (ctrl) {
+                std::u16string str;
+                ::PasteTextToClipboard(reinterpret_cast<std::wstring&>(str));
+                const char16_t* const a = str.c_str();
+                const char16_t* const b = a + str.length();
+                gui_op = g_platform.Doc().GuiText({ a, b });
+            }
             break;
         case VK_RETURN:
-            g_platform.Doc().GuiReturn();
+            gui_op = g_platform.Doc().GuiReturn();
             break;
         case VK_LEFT:
-            g_platform.Doc().GuiLeft(ctrl, shift);
+            gui_op = g_platform.Doc().GuiLeft(ctrl, shift);
             break;
         case VK_UP:
-            g_platform.Doc().GuiUp(ctrl, shift);
+            gui_op = g_platform.Doc().GuiUp(ctrl, shift);
             break;
         case VK_RIGHT:
-            g_platform.Doc().GuiRight(ctrl, shift);
+            gui_op = g_platform.Doc().GuiRight(ctrl, shift);
             break;
         case VK_DOWN:
-            g_platform.Doc().GuiDown(ctrl, shift);
+            gui_op = g_platform.Doc().GuiDown(ctrl, shift);
             break;
-            //case 'P':
-            //    g_platform.Doc().InsertText({ 0, 1000 }, u"red \nblur"_red);
-            //    break;
+        case VK_HOME:
+            gui_op = g_platform.Doc().GuiHome(ctrl, shift);
+            break;
+        case VK_END:
+            gui_op = g_platform.Doc().GuiEnd(ctrl, shift);
+            break;
+        case VK_PRIOR:
+            gui_op = g_platform.Doc().GuiPageUp(ctrl, shift);
+            break;
+        case VK_NEXT:
+            gui_op = g_platform.Doc().GuiPageDown(ctrl, shift);
+            break;
         case VK_BACK:
-            g_platform.Doc().GuiBackspace(ctrl);
+            gui_op = g_platform.Doc().GuiBackspace(ctrl);
             break;
         case VK_DELETE:
-            g_platform.Doc().GuiDelete(ctrl);
+            gui_op = g_platform.Doc().GuiDelete(ctrl);
             break;
     //    }
     //    break;
@@ -530,6 +521,7 @@ LRESULT WinDWnD2D::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
             msg_box_text({}, { g_platform.Doc().GetLogicLineCount() });
             break;
         }
+        if (!gui_op) ::MessageBeep(MB_ICONWARNING);
         break;
     case WM_DESTROY:
         ::PostQuitMessage(0);
@@ -848,21 +840,14 @@ void WinDWnD2D::Render() noexcept {
     this->Doc().Render();
     if (this->caret_blink_i) {
         const auto caret = this->Doc().GetCaret();
-
-        constexpr float custom_width = 2.f;
-        constexpr float custom_height_ratio = 0.9f;
-
-        const float custom_height = caret.height * custom_height_ratio;
-        const float custom_top = caret.y
-            + (1.f - custom_height_ratio) * 0.5f
-            * caret.height
-            ;
+        // GetCaret返回的矩形宽度没有意义, 可以进行自定义
+        const float custom_width = 2.f;
 
         D2D1_RECT_F rect = {
-            caret.x - custom_width * 0.5f, 
-            custom_top,
-            caret.x + custom_width * 0.5f,
-            custom_top + custom_height
+            caret.x - custom_width * 0.5f,      // 向前后偏移一半
+            caret.y + 1,                        // 上下保留一个单位的空白以保持美观
+            caret.x + custom_width * 0.5f,      // 向后后偏移一半
+            caret.y + caret.height - 1          // 上下保留一个单位的空白以保持美观
         };
         renderer->FillRectangle(rect, this->data.d2d_black);
     }

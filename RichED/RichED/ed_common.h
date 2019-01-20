@@ -129,12 +129,17 @@ namespace RichED {
         Type_Normal = 0,
         // [CEDNormalTextCell] ruby character
         Type_Ruby,
-        // [UnknownCell Class] unknown inline object
-        Type_UnknownInline,
         // [   CEDTextCell   ] just one character under ruby
         Type_UnderRuby,
         // [UnknownCell Class] image
         Type_Image,
+        // [UnknownCell Class] unknown inline object
+        Type_UnknownInline,
+
+
+
+        // object start
+        Type_InlineObject = Type_UnderRuby,
     };
 }
 
@@ -188,7 +193,7 @@ namespace RichED {
         char16_t            data[TEXT_CELL_STR_MAXLEN - 2 + 1];
     };
     // rich-data
-    struct alignas(void*) RichData {
+    struct RED_RICHED_ALIGNED RichData {
         // font size
         unit_t          size;
         // font color
@@ -304,7 +309,14 @@ namespace RichED {
     };
     // doc matrix
     struct DocMatrix {
-
+        // left mapper
+        uint16_t        left_mapper;
+        // up mapper
+        uint16_t        up_mapper;
+        // right mapper
+        uint16_t        right_mapper;
+        // down mapper
+        uint16_t        down_mapper;
     };
 }
 

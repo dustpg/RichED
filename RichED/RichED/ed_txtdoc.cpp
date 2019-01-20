@@ -199,6 +199,7 @@ namespace RichED { namespace detail {
     PCN_NOINLINE static auto find_cell1_txtoff(CEDTextCell* cell, uint32_t pos) noexcept {
         // 遍历到合适的位置
         while (pos > cell->RefString().length) {
+            assert(cell->RefMetaInfo().eol == false);
             pos -= cell->RefString().length;
             cell = detail::next_cell(cell);
         }
@@ -209,9 +210,8 @@ namespace RichED { namespace detail {
     PCN_NOINLINE static auto find_cell2_txtoff(CEDTextCell* cell, uint32_t pos) noexcept {
         // 遍历到合适的位置
         while (pos >= cell->RefString().length) {
+            if (cell->RefMetaInfo().eol) break;
             pos -= cell->RefString().length;
-            if (cell->RefMetaInfo().eol) 
-                break;
             cell = detail::next_cell(cell);
         }
         const txtoff_t rv = { cell, pos };
@@ -241,10 +241,10 @@ namespace RichED { namespace impl {
         mode_leftword,      // 左移字段
         mode_logicright,    // 右移一下
         mode_rightword,     // 右移字段
-        //mode_home,          // 一行起始
-        //mode_end,           // 一行结束
-        //mode_first,         // 文本开头
-        //mode_last,          // 文本结尾
+        mode_home,          // 一行起始
+        mode_first,         // 文本开头
+        mode_end,           // 一行结束
+        mode_last,          // 文本结尾
         //mode_leftchar,      // 左移字符
         mode_rightchar,     // 右移字符
         mode_logicup,       // 上升一行
@@ -257,6 +257,8 @@ namespace RichED { namespace impl {
 
 // this namesapce
 namespace RichED {
+    // init matrix
+    void InitMatrix(DocMatrix& matrix) noexcept;
     // check range
     struct CheckRangeCtx {
         CellPoint   begin;
@@ -277,6 +279,8 @@ namespace RichED {
     };
     // priavate impl for CEDTextDocument
     struct CEDTextDocument::Private {
+        // record op
+        static bool IsRecord(const CEDTextDocument& doc) noexcept;
         // mouse
         static bool Mouse(CEDTextDocument& doc, Point, bool hold) noexcept;
         // delete
@@ -307,8 +311,14 @@ namespace RichED {
         static bool Insert(CEDTextDocument& doc, DocPoint dp, U16View, LogicLine, bool behind)noexcept;
         // insert cell
         static bool Insert(CEDTextDocument& doc, DocPoint dp, CEDTextCell&, LogicLine&)noexcept;
+        // remove objects
+        static void RemoveRuby(CEDTextDocument& doc, DocPoint begin, DocPoint end, CheckRangeCtx&)noexcept;
+        // remove objects
+        static void RemoveObjs(CEDTextDocument& doc, DocPoint begin, DocPoint end, CheckRangeCtx&)noexcept;
         // remove text
-        static bool Remove(CEDTextDocument& doc, DocPoint begin, DocPoint end, const CheckRangeCtx&)noexcept;
+        static bool RemoveText(CEDTextDocument& doc, DocPoint begin, DocPoint end, const CheckRangeCtx&)noexcept;
+        // record text
+        static void RecordText(CEDTextDocument& doc, DocPoint begin, DocPoint end, const CheckRangeCtx&)noexcept;
         // dirty
         static void Dirty(CEDTextDocument& doc, CEDTextCell& cell, uint32_t logic_line)noexcept;
         // merge 
@@ -317,6 +327,10 @@ namespace RichED {
         static auto LogicLeft(CEDTextDocument& doc, DocPoint) noexcept ->DocPoint;
         // logic right move
         static auto LogicRight(CEDTextDocument& doc, DocPoint) noexcept->DocPoint;
+        // word left move
+        static auto WordLeft(CEDTextDocument& doc, DocPoint) noexcept->DocPoint;
+        // word right move
+        static auto WordRight(CEDTextDocument& doc, DocPoint) noexcept->DocPoint;
     };
     // RichData ==
     inline bool operator==(const RichData& a, const RichData& b) noexcept {
@@ -361,6 +375,17 @@ namespace RichED {
 
 
 /// <summary>
+/// Determines whether the specified document is record.
+/// 检查是否正在记录操作
+/// </summary>
+/// <param name="doc">The document.</param>
+/// <returns></returns>
+bool RichED::CEDTextDocument::Private::IsRecord(
+    const CEDTextDocument & doc) noexcept {
+    return !!doc.m_uUndoOp;
+}
+
+/// <summary>
 /// Initializes a new instance of the <see cref="CEDTextDocument" /> class.
 /// </summary>
 /// <param name="plat">The plat.</param>
@@ -369,6 +394,7 @@ RichED::CEDTextDocument::CEDTextDocument(IEDTextPlatform& plat, const DocInitArg
 : platform(plat) {
     // 初始化
     this->default_riched = arg.riched;
+    RichED::InitMatrix(m_matrix);
     // 默认使用CRLF
     m_linefeed.AsCRLF();
     // 初始化相关数据
@@ -564,7 +590,17 @@ bool RichED::CEDTextDocument::InsertInline(DocPoint dp, CEDTextCell&& cell) noex
 bool RichED::CEDTextDocument::RemoveText(DocPoint begin, DocPoint end) noexcept {
     CheckRangeCtx ctx;
     if (!Private::CheckRange(*this, begin, end, ctx)) return false;
-    return Private::Remove(*this, begin, end, ctx);
+    // 处理存在撤销栈的情况
+    if (Private::IsRecord(*this)) {
+        // 移除注音
+        Private::RemoveRuby(*this, begin, end, ctx);
+        // 移除对象
+        Private::RemoveObjs(*this, begin, end, ctx);
+        // 记录操作
+        Private::RecordText(*this, begin, end, ctx);
+    }
+    // 移除文本
+    return Private::RemoveText(*this, begin, end, ctx);
 }
 
 /// <summary>
@@ -655,6 +691,25 @@ void RichED::CEDTextDocument::VAlignHelperH(unit_t ar, unit_t height, CellMetric
         m.dr_height = 0;
         break;
     }
+}
+
+
+/// <summary>
+/// Begins the op.
+/// </summary>
+/// <returns></returns>
+void RichED::CEDTextDocument::BeginOP() noexcept {
+    m_uUndoOp = 1;
+}
+
+
+/// <summary>
+/// Ends the op.
+/// </summary>
+/// <returns></returns>
+void RichED::CEDTextDocument::EndOP() noexcept {
+    m_uUndoOp = 0;
+    // 检查撤销栈长度
 }
 
 // ----------------------------------------------------------------------------
@@ -777,16 +832,23 @@ bool RichED::CEDTextDocument::GuiText(U16View view) noexcept {
 bool RichED::CEDTextDocument::GuiBackspace(bool ctrl) noexcept {
     // 只读
     if (m_info.flags & Flag_GuiReadOnly) return false;
+    // 开始记录
+    this->BeginOP();
     // 删除选择区
     if (Private::DeleteSelection(*this)) {
-        // TODO: CTRL支持
-        const auto after = Private::LogicLeft(*this, m_dpCaret);
+        // TODO: BACK == LEFT ?
+        const auto after = ctrl 
+            ? Private::WordLeft(*this, m_dpCaret)
+            : Private::LogicLeft(*this, m_dpCaret)
+            ;
         if (Cmp(after) == Cmp(m_dpCaret)) return false;
         // 删除
         this->RemoveText(after, m_dpCaret);
         // 设置
         Private::SetSelection(*this, nullptr, after, impl::mode_target, false);
     }
+    // 结束记录
+    this->EndOP();
     return true;
 }
 
@@ -798,14 +860,21 @@ bool RichED::CEDTextDocument::GuiBackspace(bool ctrl) noexcept {
 bool RichED::CEDTextDocument::GuiDelete(bool ctrl) noexcept {
     // 只读
     if (m_info.flags & Flag_GuiReadOnly) return false;
+    // 开始记录
+    this->BeginOP();
     // 删除选择区
     if (Private::DeleteSelection(*this)) {
-        // TODO: CTRL支持
-        const auto after = Private::LogicRight(*this, m_dpCaret);
+        // TODO: DELETE == RIGHT ?
+        const auto after = ctrl
+            ? Private::WordRight(*this, m_dpCaret)
+            : Private::LogicRight(*this, m_dpCaret)
+            ;
         if (Cmp(after) == Cmp(m_dpCaret)) return false;
         // 删除
         this->RemoveText(m_dpCaret, after);
     }
+    // 结束记录
+    this->EndOP();
     // 设置
     return true;
 }
@@ -831,16 +900,10 @@ bool RichED::CEDTextDocument::GuiReturn() noexcept {
 /// <returns></returns>
 bool RichED::CEDTextDocument::GuiLeft(bool ctrl, bool shift) noexcept {
     assert(ctrl == 0 || ctrl == 1);
-    // 左到右: 逻辑左
-    // 右到左: 逻辑右
-    // 上到下、下到上: 
-    //     右到左: 逻辑下
-    //     左到右: 逻辑上
-    Private::SetSelection(*this, nullptr, m_dpCaret, impl::mode_logicleft + ctrl, shift);
-
+    const uint32_t mode = m_matrix.left_mapper + ctrl;
+    Private::SetSelection(*this, nullptr, m_dpCaret, mode, shift);
     // 更新选择区域
     Private::UpdateSelection(*this, m_dpCaret, m_dpAnchor);
-
     return true;
 }
 
@@ -851,13 +914,9 @@ bool RichED::CEDTextDocument::GuiLeft(bool ctrl, bool shift) noexcept {
 /// <param name="shift">if set to <c>true</c> [shift].</param>
 /// <returns></returns>
 bool RichED::CEDTextDocument::GuiRight(bool ctrl, bool shift) noexcept {
-    // 左到右: 逻辑右
-    // 右到左: 逻辑左
-    // 上到下、下到上: 
-    //     右到左: 逻辑上
-    //     左到右: 逻辑下
-    Private::SetSelection(*this, nullptr, m_dpCaret, impl::mode_logicright, shift);
-
+    assert(ctrl == 0 || ctrl == 1);
+    const uint32_t mode = m_matrix.right_mapper + ctrl;
+    Private::SetSelection(*this, nullptr, m_dpCaret, mode, shift);
     // 更新选择区域
     Private::UpdateSelection(*this, m_dpCaret, m_dpAnchor);
     return true;
@@ -886,6 +945,53 @@ bool RichED::CEDTextDocument::GuiDown(bool ctrl, bool shift) noexcept {
 
 
 /// <summary>
+/// GUIs the home.
+/// </summary>
+/// <param name="ctrl">if set to <c>true</c> [control].</param>
+/// <param name="shift">if set to <c>true</c> [shift].</param>
+/// <returns></returns>
+bool RichED::CEDTextDocument::GuiHome(bool ctrl, bool shift) noexcept {
+    assert(ctrl == 0 || ctrl == 1);
+    Private::SetSelection(*this, nullptr, m_dpCaret, impl::mode_home + ctrl, shift);
+    Private::UpdateSelection(*this, m_dpCaret, m_dpAnchor);
+    return true;
+}
+
+/// <summary>
+/// GUIs the end.
+/// </summary>
+/// <param name="ctrl">if set to <c>true</c> [control].</param>
+/// <param name="shift">if set to <c>true</c> [shift].</param>
+/// <returns></returns>
+bool RichED::CEDTextDocument::GuiEnd(bool ctrl, bool shift) noexcept {
+    assert(ctrl == 0 || ctrl == 1);
+    Private::SetSelection(*this, nullptr, m_dpCaret, impl::mode_end + ctrl, shift);
+    Private::UpdateSelection(*this, m_dpCaret, m_dpAnchor);
+    return true;
+}
+
+/// <summary>
+/// GUIs the page up.
+/// </summary>
+/// <param name="ctrl">if set to <c>true</c> [control].</param>
+/// <param name="shift">if set to <c>true</c> [shift].</param>
+/// <returns></returns>
+bool RichED::CEDTextDocument::GuiPageUp(bool ctrl, bool shift) noexcept {
+    return false;
+}
+
+/// <summary>
+/// GUIs the page down.
+/// </summary>
+/// <param name="ctrl">if set to <c>true</c> [control].</param>
+/// <param name="shift">if set to <c>true</c> [shift].</param>
+/// <returns></returns>
+bool RichED::CEDTextDocument::GuiPageDown(bool ctrl, bool shift) noexcept {
+    return false;
+}
+
+
+/// <summary>
 /// GUIs the select all.
 /// </summary>
 /// <returns></returns>
@@ -894,6 +1000,22 @@ bool RichED::CEDTextDocument::GuiSelectAll() noexcept {
     Private::SetSelection(*this, nullptr, {}, impl::mode_all, true);
     // 更新选择区
     Private::UpdateSelection(*this, m_dpCaret, m_dpAnchor);
+    return true;
+}
+
+/// <summary>
+/// GUIs the undo.
+/// </summary>
+/// <returns></returns>
+bool RichED::CEDTextDocument::GuiUndo() noexcept {
+    return false;
+}
+
+/// <summary>
+/// GUIs the redo.
+/// </summary>
+/// <returns></returns>
+bool RichED::CEDTextDocument::GuiRedo() noexcept {
     return false;
 }
 
@@ -1110,7 +1232,7 @@ void RichED::CEDTextDocument::Private::ExpandVL(
         const auto offset_end = offset_inline + cell->metrics.width;
         if (doc.m_info.wrap_mode && offset_end > viewport_w && cell->metrics.width > 0) {
             // 整个CELL换行
-            if (cell->RefMetaInfo().metatype >= Type_UnknownInline ||
+            if (cell->RefMetaInfo().metatype >= Type_InlineObject ||
                 offset_inline + cell->RefRichED().size > viewport_w ||
                 Private::CheckWrap(doc, *cell, viewport_w - offset_inline) == cell
                 ) {
@@ -1350,29 +1472,45 @@ void RichED::CEDTextDocument::Private::SetSelection(
     // 设置选择区
     switch (mode)
     {
-        uint32_t i;
     case impl::mode_all:
         // 全选: 锚点在最开始, 插入符在最后
-        doc.m_dpAnchor = doc.m_dpCaret = { 0, 0 };
-        assert(doc.m_vLogic.GetSize());
-        if (doc.m_vLogic.GetSize()) {
-            i = doc.m_vLogic.GetSize() - 1;
-            doc.m_dpCaret = { i, doc.m_vLogic[i].length };
-        }
+        doc.m_dpAnchor = { 0, 0 };
+        doc.m_dpCaret = { uint32_t(-1), uint32_t(-1) };
         break;
     case impl::mode_target:
         // 选中: 插入符更新至目标位置
         doc.m_dpCaret = point;
         break;
-    case impl::mode_leftword:
-        // TODO: CTRL移动插入符(经过字符集群)
     case impl::mode_logicleft:
         doc.m_dpCaret = Private::LogicLeft(doc, point);
         break;
-    case impl::mode_rightword:
-        // TODO: CTRL移动插入符(经过字符集群)
+    case impl::mode_leftword:
+        doc.m_dpCaret = Private::WordLeft(doc, point);
+        break;
     case impl::mode_logicright:
         doc.m_dpCaret = Private::LogicRight(doc, point);
+        break;
+    case impl::mode_rightword:
+        doc.m_dpCaret = Private::WordRight(doc, point);
+        break;
+    case impl::mode_home:
+        // 一行的开始
+        doc.m_dpCaret.line = point.line;
+        doc.m_dpCaret.pos = 0;
+        break;
+    case impl::mode_first:
+        // 全文的开始
+        doc.m_dpCaret.line = 0;
+        doc.m_dpCaret.pos = 0;
+        break;
+    case impl::mode_end:
+        // 一行的结尾
+        doc.m_dpCaret.line = point.line;
+        doc.m_dpCaret.pos = uint32_t(-1);
+        break;
+    case impl::mode_last:
+        // 全文的结尾
+        doc.m_dpCaret = { uint32_t(-1), uint32_t(-1) };
         break;
     case impl::mode_rightchar:
         // 往右移动指定数量位置
@@ -1389,6 +1527,11 @@ void RichED::CEDTextDocument::Private::SetSelection(
         // TODO: 完成
         break;
     }
+    // 范围钳制
+    const auto& llv = doc.m_vLogic;
+    if (!llv.GetSize()) return;
+    doc.m_dpCaret.line = std::min(doc.m_dpCaret.line, llv.GetSize() - 1);
+    doc.m_dpCaret.pos = std::min(doc.m_dpCaret.pos, llv[doc.m_dpCaret.line].length);
     // 不保留锚点
     if (!keep_anchor) doc.m_dpAnchor = doc.m_dpCaret;
     // 更新
@@ -1511,7 +1654,7 @@ bool RichED::CEDTextDocument::Private::Insert(
 
 
     // CELL是内联对象的情况
-    //if (cell->RefMetaInfo().metatype >= Type_UnknownInline) {
+    //if (cell->RefMetaInfo().metatype >= Type_InlineObject) {
     //    assert(cell->RefString().length == 1);
     //    assert(!"NOT IMPL");
     //}
@@ -1663,18 +1806,60 @@ bool RichED::CEDTextDocument::Private::Insert(
 }
 
 
+/// <summary>
+/// Removes the ruby.
+/// 记录并删除范围内的注音对象, 会修改ctx参数以适应后面再修改
+/// </summary>
+/// <param name="doc">The document.</param>
+/// <param name="begin">The begin.</param>
+/// <param name="end">The end.</param>
+/// <param name="ctx">The CTX.</param>
+/// <returns></returns>
+void RichED::CEDTextDocument::Private::RemoveRuby(
+    CEDTextDocument & doc, 
+    DocPoint begin, DocPoint end, 
+    CheckRangeCtx& ctx) noexcept {
+}
+
+/// <summary>
+/// Removes the objects.
+/// 记录并删除范围内的特殊对象, 会修改ctx参数以适应后面再修改
+/// </summary>
+/// <param name="doc">The document.</param>
+/// <param name="begin">The begin.</param>
+/// <param name="end">The end.</param>
+/// <param name="ctx">The CTX.</param>
+/// <returns></returns>
+void RichED::CEDTextDocument::Private::RemoveObjs(
+    CEDTextDocument& doc, DocPoint begin, DocPoint end, 
+    CheckRangeCtx& ctx) noexcept {
+}
 
 
 /// <summary>
-/// Removes the specified document.
+/// Records the text.
+/// 记录范围内的富文本信息
 /// </summary>
 /// <param name="doc">The document.</param>
 /// <param name="begin">The begin.</param>
 /// <param name="end">The end.</param>
 /// <param name="">The .</param>
+/// <returns></returns>
+void RichED::CEDTextDocument::Private::RecordText(
+    CEDTextDocument & doc, DocPoint begin, DocPoint end, 
+    const CheckRangeCtx &) noexcept {
+}
+
+
+/// <summary>
+/// Removes the text.
+/// </summary>
+/// <param name="doc">The document.</param>
+/// <param name="begin">The begin.</param>
+/// <param name="end">The end.</param>
 /// <param name="ctx">The CTX.</param>
 /// <returns></returns>
-bool RichED::CEDTextDocument::Private::Remove(
+bool RichED::CEDTextDocument::Private::RemoveText(
     CEDTextDocument& doc, DocPoint begin, DocPoint end,
     const CheckRangeCtx& ctx) noexcept {
     // 解包
@@ -1692,7 +1877,7 @@ bool RichED::CEDTextDocument::Private::Remove(
     // 处理
     const auto cell2_next = detail::next_cell(cell2);
     bool delete_eol = false;
-    // 删除的是同一个CELL
+    // 删除地点在同一个CELL内部
     if (cell1 == cell2) {
         const auto prev_cell1 = cell1->prev;
         delete_eol = cell1->RefMetaInfo().eol;
@@ -1710,7 +1895,7 @@ bool RichED::CEDTextDocument::Private::Remove(
         // 连接CELL1, CELL2
         cell1->next = cell2;
         cell2->prev = cell1;
-        //cell1->ClearEOL();
+        cell1->ClearEOL();
         // CELL1: 删除[pos1, end)
         // CELL2: 删除[0, pos2)
         cell1->RemoveTextEx({ pos1, cell1->RefString().length - pos1 });
@@ -1745,8 +1930,8 @@ bool RichED::CEDTextDocument::Private::Remove(
         auto& llv = doc.m_vLogic;
         const auto len = llv.GetSize();
         const auto ptr = llv.GetData();
-        const auto bsize = sizeof(ptr[0]) * (len - end.line);
-        std::memmove(ptr + begin.line, ptr + end.line, bsize);
+        const auto bsize = sizeof(ptr[0]) * (len - end.line - 1);
+        std::memmove(ptr + begin.line + 1, ptr + end.line + 1, bsize);
         llv.ReduceSize(len + begin.line - end.line);
     }
     return true;
@@ -1850,10 +2035,14 @@ bool RichED::CEDTextDocument::Private::HitTest(
     
     const auto cmp = [](unit_t ll, const VisualLine& vl) noexcept { return  ll < vl.offset; };
     const auto itr = std::upper_bound(vlv.begin(), vlv.end(), pos.y, cmp);
-    // 正常情况下, itr指向的是下一行. 比如: [0, 20, 40]中, 输入10输出指向20
-    int offset = -1;
     // 太高的话算第一行
-    if (itr == vlv.begin()) offset = 0;
+    if (itr == vlv.begin()) {
+        ctx.visual_line = &itr[0];
+        ctx.text_cell = detail::next_cell(&doc.m_head);
+        ctx.len_before_cell = 0;
+        ctx.pos_in_cell = 0;
+        return true;
+    }
     // 太低的话算末尾
     else if (itr == vlv.end()) {
         auto& last = itr[-1];
@@ -1865,6 +2054,8 @@ bool RichED::CEDTextDocument::Private::HitTest(
         ctx.len_before_cell -= ctx.pos_in_cell;
         return true;
     }
+    // 正常情况下, itr指向的是下一行. 比如: [0, 20, 40]中, 输入10输出指向20
+    constexpr int offset = -1;
     // 获取指定信息
     const auto& line0 = itr[offset];
     ctx.visual_line = &line0;
@@ -1934,6 +2125,16 @@ void RichED::CEDTextDocument::Private::HitTest(
     const auto size = vlv.GetSize();
     const auto bad_end = vlv.end() - 1;
     auto itr = RichED::LowerVL(vlv.begin(), vlv.end(), dp.line);
+    // 最后一个
+    //if (itr == bad_end && dp.pos == 0) {
+    //    ctx.text_cell = static_cast<CEDTextCell*>(bad_end->first->prev);
+    //    ctx.visual_line = itr - 1;
+    //    ctx.len_before_cell = ctx.visual_line->char_len_before;
+    //    ctx.len_before_cell += ctx.visual_line->char_len_this;
+    //    ctx.pos_in_cell = ctx.text_cell->RefString().length;
+    //    ctx.len_before_cell -= ctx.pos_in_cell;
+    //    return;
+    //}
     assert(itr < bad_end);
     // 有效行
     if (itr < bad_end) {
@@ -2194,4 +2395,45 @@ auto RichED::CEDTextDocument::Private::LogicRight(
         }
     }
     return rv;
+}
+
+/// <summary>
+/// Words the left.
+/// </summary>
+/// <param name="doc">The document.</param>
+/// <param name="dp">The dp.</param>
+/// <returns></returns>
+auto RichED::CEDTextDocument::Private::WordLeft(
+    CEDTextDocument& doc, DocPoint dp) noexcept -> DocPoint{
+    // TODO: 具体实现
+    return Private::LogicLeft(doc, dp);
+}
+
+/// <summary>
+/// Words the right.
+/// </summary>
+/// <param name="doc">The document.</param>
+/// <param name="dp">The dp.</param>
+/// <returns></returns>
+auto RichED::CEDTextDocument::Private::WordRight(
+    CEDTextDocument & doc, DocPoint dp) noexcept -> DocPoint {
+    // TODO: 具体实现
+    return Private::LogicRight(doc, dp);
+}
+
+
+
+// ----------------------------------------------------------------------------
+//                               DocMatrix
+// ----------------------------------------------------------------------------
+
+namespace RichED {
+    // matrix init
+    void InitMatrix(DocMatrix& matrix) noexcept {
+        // 方向键映射逻辑方向
+        matrix.left_mapper  = impl::mode_logicleft;
+        matrix.up_mapper    = impl::mode_logicup;
+        matrix.right_mapper = impl::mode_logicright;
+        matrix.down_mapper  = impl::mode_logicdown;
+    }
 }
