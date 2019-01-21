@@ -1750,19 +1750,19 @@ bool RichED::CEDTextDocument::Private::Insert(
     // 第一次遍历, 为m_vLogic创建空间
     const auto lf_count = detail::lfcount(view).line;
     if (lf_count) {
-        //[lf_count, &doc, dp, linedata]() noexcept {
         const size_t moved = sizeof(LogicLine) * (doc.m_vLogic.GetSize() - dp.line - 1);
         const auto ns = doc.m_vLogic.GetSize() + lf_count;
         if (!detail::resize_buffer(doc.m_vLogic, doc.platform, ns)) return false;
         const auto ptr = doc.m_vLogic.GetData();
         const auto base = ptr + dp.line;
-        std::memmove(base + lf_count, base, moved);
-        for (uint32_t i = 0; i != lf_count; ++i) ptr[i + 1] = { linedata.first, 0 };
+        // [insert+1, prev_end) MOVETO [insert+1+lfcount, END)
+        std::memmove(base + lf_count + 1, base + 1, moved);
+        for (uint32_t i = 0; i != lf_count; ++i)
+            base[i] = { linedata.first, 0 };
         // 初始化行信息
         const uint32_t left = linedata.length - dp.pos;
         base[0].length = dp.pos;
         base[lf_count].length = left;
-        //}();
     }
 
 
@@ -2048,7 +2048,7 @@ void RichED::CEDTextDocument::Private::RecordRich(
         }
     }
     // 最后一个
-    end.pos += pos2;
+    end.pos += pos2 - start;
     assert(index < count);
     impl::rich_set(data, index, *riched, begin, end);
     // 添加
