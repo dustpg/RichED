@@ -244,6 +244,8 @@ namespace RichED {
         uint32_t        length;
         // char set
         char16_t        string[2];
+        // view
+        inline auto View() const noexcept { return U16View{ string, string + length }; }
         // as CRLF
         inline void AsCRLF() noexcept { string[0] = '\r'; string[1] = '\n'; length = 2; }
         // as LF

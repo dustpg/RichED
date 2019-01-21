@@ -23,6 +23,12 @@ RED_LUT_ALIGNED const uint32_t RED_CJK_LUT[] = {
 
 // namesapce RichED::detail
 namespace RichED { namespace detail {
+    // op record
+    struct op_recorder { 
+        CEDTextDocument& doc;
+        op_recorder(CEDTextDocument& doc) noexcept : doc(doc) { doc.BeginOp(); };
+        ~op_recorder() noexcept { doc.EndOp(); };
+    };
     // is_surrogate
     inline bool is_surrogate(uint16_t ch) noexcept { return ((ch) & 0xF800) == 0xD800; }
     // is_low_surrogate
@@ -149,6 +155,9 @@ namespace RichED { namespace detail {
     inline auto next_cell(Node* node) noexcept {
         return static_cast<CEDTextCell*>(node->next); }
     // cell from node
+    inline auto prev_cell(Node* node) noexcept {
+        return static_cast<CEDTextCell*>(node->prev); }
+    // cell from node
     inline auto next_cell(const Node* node) noexcept {
         return static_cast<const CEDTextCell*>(node->next); }
     // itr
@@ -246,12 +255,30 @@ namespace RichED { namespace impl {
         mode_end,           // 一行结束
         mode_last,          // 文本结尾
         //mode_leftchar,      // 左移字符
-        mode_rightchar,     // 右移字符
+        //mode_rightchar,     // 右移字符
         mode_logicup,       // 上升一行
         mode_viewup,        // 视口上升
         mode_logicdown,     // 下降一行
         mode_viewdown,      // 视口下降
     };
+    // rich undoredo
+    void*rich_undoredo(uint32_t count) noexcept;
+    // remove richedtext
+    void rich_as_remove(void* ptr, uint16_t id) noexcept;
+    // rich undoredo
+    void rich_set(void*, uint32_t, const RichData&, DocPoint, DocPoint) noexcept;
+
+
+    // text undoredo
+    void*text_undoredo(uint32_t count) noexcept;
+    // remove text
+    void text_as_remove(void* ptr, uint16_t id, DocPoint, DocPoint) noexcept;
+    // insert text
+    void text_as_insert(void* ptr, uint16_t id, DocPoint, DocPoint) noexcept;
+    // text append
+    void text_append(void*, uint32_t, U16View view) noexcept;
+    // text append
+    void text_append(void*, uint32_t, char16_t ch) noexcept;
 }}
 
 
@@ -279,6 +306,9 @@ namespace RichED {
     };
     // priavate impl for CEDTextDocument
     struct CEDTextDocument::Private {
+        // Gen Text
+        template<typename T, typename U> 
+        static void GenText(CEDTextDocument& doc, DocPoint begin, DocPoint end, T ap, U lf) noexcept;
         // record op
         static bool IsRecord(const CEDTextDocument& doc) noexcept;
         // mouse
@@ -297,6 +327,8 @@ namespace RichED {
         static void UpdateSelection(CEDTextDocument&, DocPoint caret, DocPoint anc) noexcept;
         // force update selection
         static void RefreshSelection(CEDTextDocument&, DocPoint begin, DocPoint end) noexcept;
+        // rich range
+        static bool RichRange(const CheckRangeCtx&, CellPoint out[2]) noexcept;
         // check range
         static bool CheckRange(CEDTextDocument& doc, DocPoint begin, DocPoint end, CheckRangeCtx& ctx) noexcept;
         // check wrap mode
@@ -317,11 +349,15 @@ namespace RichED {
         static void RemoveObjs(CEDTextDocument& doc, DocPoint begin, DocPoint end, CheckRangeCtx&)noexcept;
         // remove text
         static bool RemoveText(CEDTextDocument& doc, DocPoint begin, DocPoint end, const CheckRangeCtx&)noexcept;
+        // record rich
+        static void RecordRich(CEDTextDocument& doc, DocPoint begin, const CheckRangeCtx&)noexcept;
         // record text
-        static void RecordText(CEDTextDocument& doc, DocPoint begin, DocPoint end, const CheckRangeCtx&)noexcept;
-        // dirty
+        static void RecordText(CEDTextDocument& doc, DocPoint begin, DocPoint end)noexcept;
+        // record text for ins
+        static void RecordTextEx(CEDTextDocument& doc, DocPoint begin, DocPoint end, U16View)noexcept;
+        // mark dirty
         static void Dirty(CEDTextDocument& doc, CEDTextCell& cell, uint32_t logic_line)noexcept;
-        // merge 
+        // merge cells
         static bool Merge(CEDTextDocument& doc, CEDTextCell& cell, unit_t, unit_t) noexcept;
         // logic left move
         static auto LogicLeft(CEDTextDocument& doc, DocPoint) noexcept ->DocPoint;
@@ -334,8 +370,10 @@ namespace RichED {
     };
     // RichData ==
     inline bool operator==(const RichData& a, const RichData& b) noexcept {
-        return !std::memcmp(&a, &b, sizeof(a));
-    }
+        return !std::memcmp(&a, &b, sizeof(a)); }
+    // RichData !==
+    inline bool operator!=(const RichData& a, const RichData& b) noexcept {
+        return !(a == b); }
     // redraw
     inline void NeedRedraw(CEDTextDocument& doc) noexcept {
         doc.platform.ValueChanged(IEDTextPlatform::Changed_View);
@@ -465,6 +503,9 @@ void RichED::CEDTextDocument::BeforeRender() noexcept {
     const auto bottom = m_rcViewport.y + m_rcViewport.height;
     const auto maxbtm = max_unit();
     Private::ExpandVL(*this, uint32_t(-1), maxbtm);
+#ifndef NDEBUG
+    this->platform.DebugOutput("<BeforeRender>");
+#endif // !NDEBUG
 }
 
 /// <summary>
@@ -515,14 +556,31 @@ void RichED::CEDTextDocument::SetPos(Point pos) noexcept {
 /// <param name="riched">The riched.</param>
 /// <param name="behind">if set to <c>true</c> [behind].</param>
 /// <returns></returns>
-bool RichED::CEDTextDocument::InsertText(DocPoint dp, U16View view, bool behind) noexcept {
+auto RichED::CEDTextDocument::InsertText(
+    DocPoint dp, U16View view, bool behind) noexcept -> DocPoint {
     if (dp.line < m_vLogic.GetSize()) {
         const auto line_data = m_vLogic[dp.line];
         dp.pos = std::min(dp.pos, line_data.length);
-        return Private::Insert(*this, dp, view, line_data, behind);
+        // 获取偏移量
+        const auto move = detail::lfcount(view);
+        DocPoint after = dp;
+        // 往右移动指定数量位置
+        after.line += move.line;
+        // 如果存在换行则是下一行的目的地址
+        if (move.line) after.pos = move.pos;
+        // 否则是偏移量
+        else after.pos += move.pos;
+
+        // 处理存在撤销栈的情况
+        if (Private::IsRecord(*this)) {
+            // 记录文本
+            Private::RecordTextEx(*this, dp, after, view);
+        }
+        if (Private::Insert(*this, dp, view, line_data, behind)) return after;
+        assert(!"FAILED");
     }
     assert(!"OUT OF RANGE");
-    return false;
+    return dp;
 }
 
 
@@ -562,6 +620,20 @@ bool RichED::CEDTextDocument::InsertRuby(DocPoint dp, char32_t ch, U16View view,
 }
 
 /// <summary>
+/// Sets the anchor caret.
+/// </summary>
+/// <param name="anchor">The anchor.</param>
+/// <param name="caret">The caret.</param>
+/// <returns></returns>
+void RichED::CEDTextDocument::SetAnchorCaret(
+    DocPoint anchor, DocPoint caret) noexcept {
+    m_dpAnchor = anchor;
+    Private::SetSelection(*this, nullptr, caret, impl::mode_target, true);
+    //Private::RefreshCaret(*this, m_dpCaret, nullptr);
+    Private::UpdateSelection(*this, m_dpCaret, m_dpAnchor);
+}
+
+/// <summary>
 /// Inserts the inline.
 /// </summary>
 /// <param name="dp">The dp.</param>
@@ -592,12 +664,17 @@ bool RichED::CEDTextDocument::RemoveText(DocPoint begin, DocPoint end) noexcept 
     if (!Private::CheckRange(*this, begin, end, ctx)) return false;
     // 处理存在撤销栈的情况
     if (Private::IsRecord(*this)) {
-        // 移除注音
-        Private::RemoveRuby(*this, begin, end, ctx);
-        // 移除对象
-        Private::RemoveObjs(*this, begin, end, ctx);
-        // 记录操作
-        Private::RecordText(*this, begin, end, ctx);
+        // 富文本的情况
+        if (m_info.flags & Flag_RichText) {
+            // 移除注音
+            Private::RemoveRuby(*this, begin, end, ctx);
+            // 移除对象
+            Private::RemoveObjs(*this, begin, end, ctx);
+            // 记录富有
+            Private::RecordRich(*this, begin, ctx);
+        }
+        // 记录文本
+        Private::RecordText(*this, begin, end);
     }
     // 移除文本
     return Private::RemoveText(*this, begin, end, ctx);
@@ -618,6 +695,44 @@ void RichED::CEDTextDocument::Resize(Size size) noexcept {
 }
 
 
+
+/// <summary>
+/// Gens the text.
+/// </summary>
+/// <param name="str">The string.</param>
+/// <param name="begin">The begin.</param>
+/// <param name="end">The end.</param>
+/// <returns></returns>
+template<typename T, typename U>
+void RichED::CEDTextDocument::Private::GenText(
+    CEDTextDocument& doc, DocPoint begin, DocPoint end, 
+    T append, U linefeed) noexcept {
+    CheckRangeCtx ctx;
+    // 检测范围合理性
+    if (!Private::CheckRange(doc, begin, end, ctx)) return;
+    // 同一个CELL
+    if (ctx.begin.cell == ctx.end.cell) {
+        const auto ptr = ctx.end.cell->RefString().data;
+        append({ ptr + ctx.begin.offset, ptr + ctx.end.offset });
+    }
+    else {
+        const auto ptr0 = ctx.begin.cell->RefString().data;
+        const auto len0 = ctx.begin.cell->RefString().length;
+        const auto ptr1 = ctx.end.cell->RefString().data;
+        // A
+        append({ ptr0 + ctx.begin.offset, ptr0 + len0 });
+        if (ctx.begin.cell->RefMetaInfo().eol) linefeed();
+        // B
+        const auto cfor = detail::cfor_cells(ctx.begin.cell->next, ctx.end.cell);
+        for (auto& cell : cfor) {
+            append(cell.View());
+            if (cell.RefMetaInfo().eol) linefeed();
+        }
+        // C
+        append({ ptr1, ptr1 + ctx.end.offset });
+    }
+}
+
 /// <summary>
 /// Gens the text.
 /// </summary>
@@ -626,26 +741,15 @@ void RichED::CEDTextDocument::Resize(Size size) noexcept {
 /// <param name="end">The end.</param>
 /// <returns></returns>
 void RichED::CEDTextDocument::GenText(void* str, DocPoint begin, DocPoint end) noexcept {
-    CheckRangeCtx ctx;
-    // 检测范围合理性
-    if (!Private::CheckRange(*this, begin, end, ctx)) return;
-    // 同一个CELL
-    if (ctx.begin.cell == ctx.end.cell) {
-        const auto ptr = ctx.end.cell->RefString().data;
-        this->platform.AppendText(str, { ptr + ctx.begin.offset, ptr + ctx.end.offset });
-    }
-    else {
-        const auto ptr0 = ctx.begin.cell->RefString().data;
-        const auto len0 = ctx.begin.cell->RefString().length;
-        const auto ptr1 = ctx.end.cell->RefString().data;
-        // A
-        this->platform.AppendText(str, { ptr0 + ctx.begin.offset, ptr0 + len0 });
-        // B
-        const auto cfor = detail::cfor_cells(ctx.begin.cell->next, ctx.end.cell);
-        for (auto& cell : cfor) this->platform.AppendText(str, cell.View());
-        // C
-        this->platform.AppendText(str, { ptr1, ptr1 + ctx.end.offset });
-    }
+    auto& plat = this->platform;
+    const auto lf = m_linefeed.View();
+    const auto append_text = [&plat, str](U16View view) noexcept {
+        plat.AppendText(str, view);
+    };
+    const auto line_feed = [&plat, str, lf]() noexcept {
+        plat.AppendText(str, lf);
+    };
+    Private::GenText(*this, begin, end, append_text, line_feed);
 }
 
 /// <summary>
@@ -698,7 +802,7 @@ void RichED::CEDTextDocument::VAlignHelperH(unit_t ar, unit_t height, CellMetric
 /// Begins the op.
 /// </summary>
 /// <returns></returns>
-void RichED::CEDTextDocument::BeginOP() noexcept {
+void RichED::CEDTextDocument::BeginOp() noexcept {
     m_uUndoOp = 1;
 }
 
@@ -707,7 +811,7 @@ void RichED::CEDTextDocument::BeginOP() noexcept {
 /// Ends the op.
 /// </summary>
 /// <returns></returns>
-void RichED::CEDTextDocument::EndOP() noexcept {
+void RichED::CEDTextDocument::EndOp() noexcept {
     m_uUndoOp = 0;
     // 检查撤销栈长度
 }
@@ -814,13 +918,18 @@ bool RichED::CEDTextDocument::GuiChar(char32_t ch) noexcept {
 /// <param name="view">The view.</param>
 /// <returns></returns>
 bool RichED::CEDTextDocument::GuiText(U16View view) noexcept {
+    assert(view.second >= view.first);
     // 只读
     if (m_info.flags & Flag_GuiReadOnly) return false;
+    // 没有头发
+    if (view.second == view.first) return false;
+    detail::op_recorder recorder{ *this };
+    // 删除选择区
+    Private::DeleteSelection(*this);
     // 插入
-    this->InsertText(m_dpCaret, view, true);
-    // 计算距离
-    const auto move = detail::lfcount(view);
-    Private::SetSelection(*this, nullptr, move, impl::mode_rightchar, false);
+    const auto target = this->InsertText(m_dpCaret, view, true);
+    // 设置选择
+    Private::SetSelection(*this, nullptr, target, impl::mode_target, false);
     return true;
 }
 
@@ -833,7 +942,7 @@ bool RichED::CEDTextDocument::GuiBackspace(bool ctrl) noexcept {
     // 只读
     if (m_info.flags & Flag_GuiReadOnly) return false;
     // 开始记录
-    this->BeginOP();
+    detail::op_recorder recorder{ *this };
     // 删除选择区
     if (Private::DeleteSelection(*this)) {
         // TODO: BACK == LEFT ?
@@ -847,8 +956,6 @@ bool RichED::CEDTextDocument::GuiBackspace(bool ctrl) noexcept {
         // 设置
         Private::SetSelection(*this, nullptr, after, impl::mode_target, false);
     }
-    // 结束记录
-    this->EndOP();
     return true;
 }
 
@@ -861,7 +968,7 @@ bool RichED::CEDTextDocument::GuiDelete(bool ctrl) noexcept {
     // 只读
     if (m_info.flags & Flag_GuiReadOnly) return false;
     // 开始记录
-    this->BeginOP();
+    detail::op_recorder recorder{ *this };
     // 删除选择区
     if (Private::DeleteSelection(*this)) {
         // TODO: DELETE == RIGHT ?
@@ -873,8 +980,6 @@ bool RichED::CEDTextDocument::GuiDelete(bool ctrl) noexcept {
         // 删除
         this->RemoveText(m_dpCaret, after);
     }
-    // 结束记录
-    this->EndOP();
     // 设置
     return true;
 }
@@ -1008,7 +1113,7 @@ bool RichED::CEDTextDocument::GuiSelectAll() noexcept {
 /// </summary>
 /// <returns></returns>
 bool RichED::CEDTextDocument::GuiUndo() noexcept {
-    return false;
+    return m_undo.Undo(*this);
 }
 
 /// <summary>
@@ -1016,7 +1121,7 @@ bool RichED::CEDTextDocument::GuiUndo() noexcept {
 /// </summary>
 /// <returns></returns>
 bool RichED::CEDTextDocument::GuiRedo() noexcept {
-    return false;
+    return m_undo.Redo(*this);
 }
 
 // ----------------------------------------------------------------------------
@@ -1050,11 +1155,15 @@ bool RichED::CEDTextDocument::set_riched(
         cell.AsDirty();
     };
 
+    // 针对富属性的范围检测
+    CellPoint cp[2];
+    if (!Private::RichRange(ctx, cp)) return false;
     // 解包
-    const auto cell1 = ctx.begin.cell;
-    const auto pos1 = ctx.begin.offset;
-    const auto cell2 = ctx.end.cell;
-    const auto pos2 = ctx.end.offset;
+    const auto cell1 = cp[0].cell;
+    const auto pos1 = cp[0].offset;
+    const auto cell2 = cp[1].cell;
+    const auto pos2 = cp[1].offset;
+
     // 细胞分裂: 由于cell1可能等于cell2, 所以先分裂cell2
     const auto e = cell2->Split(pos2);
     const auto b = cell1->Split(pos1);
@@ -1200,6 +1309,11 @@ void RichED::CEDTextDocument::Private::ExpandVL(
     // 已经处理完毕
     if (line.lineno > target_line) return;
     if (line.offset >= bottom) return;
+
+#ifndef NDEBUG
+    doc.platform.DebugOutput("<ExpandVL>");
+#endif // !NDEBUG
+
 
     // 正式开始
     vlv.Resize(count);
@@ -1512,6 +1626,7 @@ void RichED::CEDTextDocument::Private::SetSelection(
         // 全文的结尾
         doc.m_dpCaret = { uint32_t(-1), uint32_t(-1) };
         break;
+#if 0
     case impl::mode_rightchar:
         // 往右移动指定数量位置
         doc.m_dpCaret.line += point.line;
@@ -1520,6 +1635,7 @@ void RichED::CEDTextDocument::Private::SetSelection(
         // 否则是偏移量
         else doc.m_dpCaret.pos += point.pos;
         break;
+#endif
     case impl::mode_logicup:
     case impl::mode_viewup:
     case impl::mode_logicdown:
@@ -1576,7 +1692,6 @@ bool RichED::CEDTextDocument::Private::Insert(
     assert(dp.pos <= linedata.length);
     assert(dp.line < doc.m_vLogic.GetSize());
     // TODO: 强异常保证
-    // TODO: UNRO-REDO检查
     // TODO: [优化] 最小化脏数组重建
     // TODO: [优化] 仅插入换行符
 
@@ -1800,6 +1915,7 @@ bool RichED::CEDTextDocument::Private::Insert(
     else if (pos < cell->RefString().length) if (!cell->Split(pos)) return false;
     RichED::InsertAfterFirst(*insert_after_this, obj);
 
+    
     line_data.first = detail::next_cell(next_is_first);
     line_data.length += obj.RefString().length;
     return true;
@@ -1837,19 +1953,172 @@ void RichED::CEDTextDocument::Private::RemoveObjs(
 
 
 /// <summary>
-/// Records the text.
-/// 记录范围内的富文本信息
+/// Riches the range.
+/// 针对富属性再对范围就行处理
+/// </summary>
+/// <param name="in">The in.</param>
+/// <param name="out">The out.</param>
+/// <returns></returns>
+bool RichED::CEDTextDocument::Private::RichRange(
+    const CheckRangeCtx& in, CellPoint out[2]) noexcept {
+    // 原则: 不对EOL进行富属性修改
+    // XXX: 针对多行仅仅EOL的修改如果处理?
+    assert(in.begin.cell != in.end.cell || in.begin.offset != in.end.offset);
+    out[0] = in.begin;
+    out[1] = in.end;
+    // 起点是cell结束则换到下一个cell
+    if (out[0].offset == out[0].cell->RefString().length) {
+        out[0].cell = detail::next_cell(out[0].cell);
+        out[0].offset = 0;
+        //  一致就算了: [特殊]不对EOL单独富属性就行记录
+        if (out[0].cell == out[1].cell && out[0].offset == out[1].offset) return false;
+    }
+    // 终点是cell开始则换到上一个cell结束
+    if (!out[1].offset) {
+        out[1].cell = detail::prev_cell(out[1].cell);
+        out[1].offset = out[1].cell->RefString().length;
+        //  一致就算了: [特殊]不对EOL单独富属性就行记录
+        if (out[0].cell == out[1].cell && out[0].offset == out[1].offset) return false;
+    }
+    return true;
+}
+
+/// <summary>
+/// Records the rich.
+/// 记录范围内的富属性
 /// </summary>
 /// <param name="doc">The document.</param>
 /// <param name="begin">The begin.</param>
 /// <param name="end">The end.</param>
-/// <param name="">The .</param>
+/// <param name="ctx">The CTX.</param>
 /// <returns></returns>
-void RichED::CEDTextDocument::Private::RecordText(
-    CEDTextDocument & doc, DocPoint begin, DocPoint end, 
-    const CheckRangeCtx &) noexcept {
+void RichED::CEDTextDocument::Private::RecordRich(
+    CEDTextDocument & doc, DocPoint begin, const CheckRangeCtx& ctx) noexcept {
+    assert(ctx.begin.cell != ctx.end.cell || ctx.begin.offset != ctx.end.offset);
+    // 针对富属性的范围检测
+    CellPoint cp[2];
+    if (!Private::RichRange(ctx, cp)) return;
+    // 解包
+    const auto cell1 = cp[0].cell;
+    const auto pos1 = cp[0].offset;
+    const auto cell2 = cp[1].cell;
+    const auto pos2 = cp[1].offset;
+    // 删除是中间段可以无视, 插入会正确设置富属性?
+    //if (cell1 == cell2 && pos1 && pos2 < cell1->RefString().length)
+    //    return;
+    // 计算不同的富属性多少个
+    uint32_t count = 1;
+    auto riched = &cell1->RefRichED();
+    const auto cfor = detail::cfor_cells(cell1, cell2);
+    for (auto& cell : cfor) {
+        auto& real_cell = *detail::next_cell(&cell);
+        if (real_cell.RefRichED() != *riched) {
+            riched = &real_cell.RefRichED();
+            ++count;
+        }
+    }
+    // 申请数据
+    const auto data = impl::rich_undoredo(count);
+    // TODO: OOM处理, 撤销出现OOM应该释放全部撤销信息
+    if (!data) return;
+    // 删除富属
+    impl::rich_as_remove(data, doc.m_uUndoOp++);
+    // 换行
+    if (cell1 != ctx.begin.cell && ctx.begin.cell->RefMetaInfo().eol) {
+        begin.line++;
+        begin.pos = 0;
+    }
+    // 遍历
+    auto end = begin; uint32_t index = 0;
+    auto start = pos1;
+    riched = &cell1->RefRichED();
+    for (auto& cell : cfor) {
+        // 换行
+        end.pos += cell.RefString().length - start;
+        start = 0;
+        if (cell.RefMetaInfo().eol) { end.line++; end.pos = 0; }
+
+        auto& real_cell = *detail::next_cell(&cell);
+        // 新的格式
+        if (real_cell.RefRichED() != *riched) {
+            impl::rich_set(data, index, *riched, begin, end);
+            begin = end;
+            riched = &real_cell.RefRichED();
+            ++index;
+        }
+    }
+    // 最后一个
+    end.pos += pos2;
+    assert(index < count);
+    impl::rich_set(data, index, *riched, begin, end);
+    // 添加
+    const auto op = reinterpret_cast<TrivialUndoRedo*>(data);
+    doc.m_undo.AddOp(doc, *op);
 }
 
+
+/// <summary>
+/// Records the text.
+/// </summary>
+/// <param name="doc">The document.</param>
+/// <param name="begin">The begin.</param>
+/// <param name="ctx">The CTX.</param>
+/// <returns></returns>
+void RichED::CEDTextDocument::Private::RecordText(
+    CEDTextDocument& doc, DocPoint begin, DocPoint end) noexcept {
+    // 获取文本长度
+    uint32_t length = 0;
+    const auto ac = [&](U16View view) noexcept { length += view.second - view.first;};
+    const auto lfc = [&]() noexcept { ++length; };
+    Private::GenText(doc, begin, end, ac, lfc);
+    assert(length);
+    // 保险起见
+    if (!length) return;
+    // 申请数据
+    const auto data = impl::text_undoredo(length);
+    // TODO: OOM处理, 撤销出现OOM应该释放全部撤销信息
+    if (!data) return;
+    // 删除文本
+    impl::text_as_remove(data, doc.m_uUndoOp++, begin, end);
+    uint32_t index = 0;
+    const auto append = [=,&index](U16View view) noexcept {
+        impl::text_append(data, index, view);
+        index += view.second - view.first;
+    };
+    const auto linefeed = [=,&index]() noexcept {
+        impl::text_append(data, index, '\n');
+        ++index;
+    };
+    Private::GenText(doc, begin, end, append, linefeed);
+    // 添加
+    const auto op = reinterpret_cast<TrivialUndoRedo*>(data);
+    doc.m_undo.AddOp(doc, *op);
+}
+
+/// <summary>
+/// Records the text ex.
+/// </summary>
+/// <param name="doc">The document.</param>
+/// <param name="begin">The begin.</param>
+/// <param name="end">The end.</param>
+/// <param name="view">The view.</param>
+/// <returns></returns>
+void RichED::CEDTextDocument::Private::RecordTextEx(
+    CEDTextDocument & doc, DocPoint begin, DocPoint end, 
+    U16View view) noexcept {
+    // 获取文本长度
+    const uint32_t length = view.second - view.first;
+    assert(length);
+    // 申请数据
+    const auto data = impl::text_undoredo(length);
+    // TODO: OOM处理, 撤销出现OOM应该释放全部撤销信息
+    if (!data) return;
+    impl::text_as_insert(data, doc.m_uUndoOp++, begin, end);
+    impl::text_append(data, 0, view);
+    // 添加
+    const auto op = reinterpret_cast<TrivialUndoRedo*>(data);
+    doc.m_undo.AddOp(doc, *op);
+}
 
 /// <summary>
 /// Removes the text.

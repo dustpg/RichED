@@ -46,7 +46,7 @@ bool RichED::detail::buffer_base::resize_buffer(uint32_t len, size_t size_of) no
 #ifndef NDEBUG
     if (len > m_length) {
         const auto ptr = reinterpret_cast<char*>(m_data) + size_of * m_length;
-        std::memset(ptr, -1, size_of * (len - m_length));
+        std::memset(ptr, 0xfc, size_of * (len - m_length));
     }
 #endif
     m_length = len;

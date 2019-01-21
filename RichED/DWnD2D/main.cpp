@@ -206,10 +206,11 @@ bool WinDWnD2D::Init(HWND hwnd) noexcept {
     // 初文字
     if (SUCCEEDED(hr)) {
         this->Doc().InsertText({ 0, 0 }, u"国人发明的"_red);
-        this->Doc().InsertRuby({ 0, 0 }, U'韩', u"宇宙"_red);
+        //this->Doc().InsertRuby({ 0, 0 }, U'韩', u"宇宙"_red);
         this->Doc().InsertText({ 0, 0 }, u"字没准儿是"_red);
+        this->Doc().SetFontName({ 0, 1 }, { 0, 4 }, 2);
         //this->Doc().InsertText({ 0, 0 }, u"😂😂😂😂😂"_red);
-        this->Doc().InsertRuby({ 0, 0 }, U'汉', u"hàn"_red);
+        //this->Doc().InsertRuby({ 0, 0 }, U'汉', u"hàn"_red);
         this->Doc().InsertText({ 0, 0 }, u"Hello, World!\r\n泥壕世界!\n"_red);
     }
     // 创建DWrite工厂

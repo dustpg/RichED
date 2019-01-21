@@ -32,7 +32,7 @@
 
 namespace RichED {
     // text doc
-    struct CEDTextDocument;
+    class CEDTextDocument;
     // Trivial UndoRedo data, no CTOR/DTOR
     struct TrivialUndoRedo : Node {
         // undo
@@ -45,6 +45,10 @@ namespace RichED {
         uint16_t                    type;
         // decorator
         uint16_t                    decorator;
+        // anchor
+        DocPoint                    anchor;
+        // caret
+        DocPoint                    caret;
     };
     // undo redo 
     class CEDUndoRedo {
@@ -55,12 +59,20 @@ namespace RichED {
         ~CEDUndoRedo() noexcept { this->Clear(); }
         // clear all history
         void Clear() noexcept;
+        // add an undoredo op
+        void AddOp(CEDTextDocument&, TrivialUndoRedo&) noexcept;
+        // undo
+        bool Undo(CEDTextDocument& doc) noexcept;
+        // redo
+        bool Redo(CEDTextDocument& doc) noexcept;
     public:
         // fixed length 
         uint32_t      const max_deep;
     private:
         // current length
         uint32_t            m_cCurrent = 0;
+        // stack top
+        Node*               m_pStackTop = &m_tail;
         // head
         Node                m_head;
         // tail

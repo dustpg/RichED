@@ -27,6 +27,7 @@
 
 #include "ed_common.h"
 #include "ed_txtbuf.h"
+#include "ed_undoredo.h"
 #include <cstddef>
 
 // riched namespace
@@ -63,8 +64,6 @@ namespace RichED {
     //using funcptr_t = void(*)(int);
     // text document
     class CEDTextDocument {
-        // private impl
-        struct Private;
         // flag set private
         enum flag_set : uint32_t { set_effect = 0 << 2, set_fflags = 1 << 2 };
         // set riched
@@ -79,6 +78,8 @@ namespace RichED {
             uint16_t flags,  uint32_t set
         ) noexcept;
     public:
+        // private impl
+        struct Private;
         // ctor
         CEDTextDocument(IEDTextPlatform&, const DocInitArg&) noexcept;
         // ctor
@@ -113,15 +114,17 @@ namespace RichED {
         auto GetSelectionRange() const noexcept { return DocRange{ m_dpSelBegin, m_dpSelEnd }; }
     public:
         // begin an operation for undo-stack
-        void BeginOP() noexcept;
+        void BeginOp() noexcept;
         // end an operation for undo-stack
-        void EndOP() noexcept;
+        void EndOp() noexcept;
+        // force set & update caret anchor
+        void SetAnchorCaret(DocPoint anchor, DocPoint caret) noexcept;
         // insert inline object
         bool InsertInline(DocPoint, CEDTextCell&&) noexcept;
         // insert ruby
         bool InsertRuby(DocPoint, char32_t, U16View, const RichData* = nullptr) noexcept;
         // insert text, pos = min(DocPoint::pos, line-length)
-        bool InsertText(DocPoint, U16View, bool behind =false) noexcept;
+        auto InsertText(DocPoint, U16View, bool behind =false) noexcept ->DocPoint;
         // remove text, pos = min(DocPoint::pos, line-length)
         bool RemoveText(DocPoint begin, DocPoint end) noexcept;
     public: // Rich Text Format
@@ -198,6 +201,8 @@ namespace RichED {
         // default riched
         RichData                default_riched;
     private:
+        // undo stack
+        CEDUndoRedo             m_undo;
         // matrix
         DocMatrix               m_matrix;
         // normal info
