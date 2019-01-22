@@ -26,6 +26,9 @@ static const wchar_t* const FONT_NAME_LIST[] = {
 };
 
 
+struct RED_RICHED_ALIGNED DWnD2DImageExtraInfo {
+    wchar_t             uri[4096];
+};
 
 struct DWnD2DDataField {
     HWND                    hwnd;
@@ -53,10 +56,18 @@ struct WinDWnD2D final : IEDTextPlatform {
     // is valid password
     bool IsValidPassword(char32_t ch) noexcept override { return ch < 128; }
     // append text
-    void AppendText(void* string, U16View view) noexcept override {
-        auto& obj = *reinterpret_cast<std::u16string*>(string);
+    void AppendText(CtxPtr ctx, U16View view) noexcept override {
+        auto& obj = *reinterpret_cast<std::u16string*>(ctx);
         try { obj.append(view.first, view.second); }
         catch (...) {}
+    }
+    // write to file
+    bool WriteToFile(CtxPtr ctx, const uint8_t data[], uint32_t len) noexcept override {
+        return false;
+    }
+    // read from file
+    bool ReadFromFile(CtxPtr ctx, uint8_t data[], uint32_t len) noexcept override {
+        return false;
     }
     // recreate context
     void RecreateContext(CEDTextCell& cell) noexcept override;
@@ -98,6 +109,7 @@ struct WinDWnD2D final : IEDTextPlatform {
     bool            click_in_area   = false;
     bool            unused          = false;
     char16_t        ime_buf[IME_BUF_LEN];
+
 
     // doc
     std::aligned_storage<sizeof(CEDTextDocument), alignof(CEDTextDocument)>
@@ -206,11 +218,12 @@ bool WinDWnD2D::Init(HWND hwnd) noexcept {
     // 初文字
     if (SUCCEEDED(hr)) {
         this->Doc().InsertText({ 0, 0 }, u"国人发明的"_red);
-        //this->Doc().InsertRuby({ 0, 0 }, U'韩', u"宇宙"_red);
+        this->Doc().InsertRuby({ 0, 0 }, U'韩', u"宇宙"_red);
         this->Doc().InsertText({ 0, 0 }, u"字没准儿是"_red);
-        this->Doc().SetFontName({ 0, 1 }, { 0, 4 }, 2);
+        //this->Doc().SetFontName({ 0, 1 }, { 0, 4 }, 2);
+        this->Doc().SetFontSize({ 0, 3 }, { 0, 4 }, 16);
         //this->Doc().InsertText({ 0, 0 }, u"😂😂😂😂😂"_red);
-        //this->Doc().InsertRuby({ 0, 0 }, U'汉', u"hàn"_red);
+        this->Doc().InsertRuby({ 0, 0 }, U'汉', u"hàn"_red);
         this->Doc().InsertText({ 0, 0 }, u"Hello, World!\r\n泥壕世界!\n"_red);
     }
     // 创建DWrite工厂
@@ -642,13 +655,18 @@ void WinDWnD2D::RecreateContext(CEDTextCell& cell) noexcept {
 /// <param name="cell">The cell.</param>
 /// <returns></returns>
 void WinDWnD2D::DeleteContext(CEDTextCell& cell) noexcept {
-    if (const auto ptr = static_cast<IDWriteTextLayout*>(cell.ctx.context)) {
-        ptr->Release();
-    }
-    cell.ctx.context = nullptr;
+    //if (!cell.ctx.context) return;
+    auto& ptr = reinterpret_cast<IUnknown*&>(cell.ctx.context);
+    ::SafeRelease(ptr);
 }
 
 
+/// <summary>
+/// Draws the context.
+/// </summary>
+/// <param name="cell">The cell.</param>
+/// <param name="baseline">The baseline.</param>
+/// <returns></returns>
 void WinDWnD2D::DrawContext(CEDTextCell& cell, unit_t baseline) noexcept {
     // 睡眠状态则唤醒
     if (!cell.ctx.context) this->RecreateContext(cell);

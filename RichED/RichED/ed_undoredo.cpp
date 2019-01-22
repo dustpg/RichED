@@ -1,10 +1,30 @@
-﻿#include "ed_undoredo.h"
-#include "ed_txtdoc.h"
+﻿#include "ed_txtdoc.h"
+#include "ed_txtplat.h"
+#include "ed_undoredo.h"
 
 #include <cstring>
 #include <cstdlib>
 #include <type_traits>
 #include <algorithm>
+
+enum : uint32_t { 
+    RED_ENDIAN_CODE = 0x00010203,
+    RED_REV1_CODE   = 0x00000000,
+    RED_REV2_CODE   = 0xffffffff,
+};
+
+/// <summary>
+/// Reds the magic code.
+/// </summary>
+/// <returns></returns>
+static inline uint32_t red_magic_code() noexcept {
+    union { uint32_t code; uint8_t u8[4]; } data;
+    data.u8[0] = 0x64;
+    data.u8[1] = 0x75;
+    data.u8[2] = 0x73;
+    data.u8[3] = 0x74;
+    return data.code;
+}
 
 
 namespace RichED {
@@ -140,25 +160,62 @@ void RichED::CEDUndoRedo::AddOp(CEDTextDocument& doc, TrivialUndoRedo& op) noexc
 }
 
 // ----------------------------------------------------------------------------
-//                               Ruby Char Insert
+//                               Object Char Insert
 // ----------------------------------------------------------------------------
 
 namespace RichED {
     // singe op for ruby
-    struct RubySingeOp {
-        // under riched
-        RichData        under;
-        // ruby riched
-        RichData        ruby;
+    struct RED_RICHED_ALIGNED ObjectSingeOp {
         // point
-        DocPoint        point;
-        // length of ruby
+        DocPoint        begin;
+        // ruby text length
         uint32_t        ruby_length;
-        // under char
-        char16_t        under_char[2];
-        // ruby char
-        char16_t        ruby_char[2];
+        // type of this
+        CellType        cell_type;
+        // length of extra data
+        uint16_t        extra_length;
+        // next op
+        auto Next() noexcept {
+            const size_t exlen = extra_length;
+            const size_t alignc = alignof(ObjectSingeOp);
+            const size_t mask = ~(alignc - 1);
+            const size_t aligned_exlen = (exlen + (alignc - 1)) & mask;
+            const auto ptr = reinterpret_cast<char*>(this + 1) + aligned_exlen;
+            return reinterpret_cast<ObjectSingeOp*>(ptr);
+        }
     };
+    // Rollback objs
+    void RollbackObjs(CEDTextDocument& doc, TrivialUndoRedo& op) noexcept {
+        auto obj = reinterpret_cast<ObjectSingeOp*>(&op + 1);
+        const auto end_ptr = reinterpret_cast<char*>(&op.bytes_from_here) + op.bytes_from_here;
+        const auto end_itr = reinterpret_cast<ObjectSingeOp*>(end_ptr);
+        while (obj < end_itr) {
+            assert(obj->Next() <= end_itr);
+            auto end_dp = obj->begin; end_dp.pos++;
+            doc.RemoveText(obj->begin, end_dp);
+            obj = obj->Next();
+        }
+    }
+    // execute objs
+    void ExecuteObjs(CEDTextDocument& doc, TrivialUndoRedo& op) noexcept {
+        auto obj = reinterpret_cast<ObjectSingeOp*>(&op + 1);
+        const auto end_ptr = reinterpret_cast<char*>(&op.bytes_from_here) + op.bytes_from_here;
+        const auto end_itr = reinterpret_cast<ObjectSingeOp*>(end_ptr);
+        while (obj < end_itr) {
+            assert(obj->Next() <= end_itr);
+            //assert(!!obj->ruby_length != !!obj->extra_length);
+            // 注音符号： 将范围字符转换为被注音, 然后后面指定长度为注音
+            if (obj->ruby_length) {
+
+            }
+            // 其他内联对象: 利用EXTRA-INFO创建内联对象
+            else if (obj->extra_length) {
+
+            }
+            //assert(!"NOT IMPL");
+            obj = obj->Next();
+        }
+    }
 }
 
 // ----------------------------------------------------------------------------
@@ -240,7 +297,7 @@ namespace RichED {
         // remove: rich
         Op_RemoveRich,
         // remove: objs
-        // remove: ruby
+        Op_RemoveObjs,
 
         // insert: text
         Op_InsertText
@@ -385,6 +442,59 @@ namespace RichED {
 #endif 
         }
     }
+
+    namespace impl {
+        /// <summary>
+        /// Objses the undoredo.
+        /// </summary>
+        /// <param name="count">The count.</param>
+        /// <param name="length">The length.</param>
+        /// <returns></returns>
+        void* objs_undoredo(uint32_t count, uint32_t length) noexcept {
+            assert(count);
+            assert((length & (alignof(TrivialUndoRedo) - 1)) == 0);
+            const size_t len = sizeof(TrivialUndoRedo)
+                + sizeof(ObjectSingeOp) * count
+                + length
+                ;
+            const auto ptr = std::malloc(len);
+            if (ptr) {
+                const auto op = reinterpret_cast<TrivialUndoRedo*>(ptr);
+                const size_t offset = offsetof(TrivialUndoRedo, bytes_from_here);
+                op->bytes_from_here = len - offset;
+            }
+            return ptr;
+        }
+        /// <summary>
+        /// Objses as remove.
+        /// </summary>
+        /// <param name="ptr">The PTR.</param>
+        /// <param name="id">The identifier.</param>
+        /// <returns></returns>
+        void*objs_as_remove(void* ptr, uint16_t id) noexcept {
+            assert(ptr && id);
+            const auto op = reinterpret_cast<TrivialUndoRedo*>(ptr);
+            op->type = Op_RemoveObjs;
+            op->decorator = id - 1;
+            return op + 1;
+        }
+        /// <summary>
+        /// Objses as remove.
+        /// </summary>
+        /// <param name="ptr">The PTR.</param>
+        /// <param name="id">The identifier.</param>
+        /// <returns></returns>
+        void*objs_as_goon(void* ptr, DocPoint dp, uint32_t ruby, CellType type, uint16_t exlen, void* data) noexcept {
+            assert(ptr);
+            const auto op = reinterpret_cast<ObjectSingeOp*>(ptr);
+            op->begin = dp;
+            op->ruby_length = ruby;
+            op->extra_length = exlen;
+            op->cell_type = type;
+            std::memcpy(op + 1, data, exlen);
+            return op->Next();
+        }
+    }
     /// <summary>
     /// Initializes the callback.
     /// </summary>
@@ -412,6 +522,13 @@ namespace RichED {
             op.undo = RichED::ExecuteRich;
             op.redo = RichED::UndoRedoIdle;
             break;
+        case Op_RemoveObjs:
+            // 移除内联对象
+            // - 撤销: 内联对象的再生
+            // - 重做: 内联对象的无视
+            op.undo = RichED::ExecuteObjs;
+            op.redo = RichED::UndoRedoIdle;
+            break;
         case Op_InsertText:
             // 删除文本
             // - 撤销: 文本移除
@@ -421,4 +538,49 @@ namespace RichED {
             break;
         }
     }
+}
+
+
+// ----------------------------------------------------------------------------
+//                             RichED Save/Load
+// ----------------------------------------------------------------------------
+
+
+/// <summary>
+/// Saves the bin file.
+/// </summary>
+/// <param name="ctx">The CTX.</param>
+/// <returns></returns>
+bool RichED::CEDTextDocument::SaveBinFile(CtxPtr ctx) noexcept {
+    uint32_t magic_codes[4];
+    magic_codes[0] = red_magic_code();
+    magic_codes[1] = RED_ENDIAN_CODE;
+    magic_codes[2] = RED_REV1_CODE;
+    magic_codes[3] = RED_REV2_CODE;
+    auto& plat = this->platform;
+    const auto write_file = [&plat, ctx](const void* ptr, uint32_t len) noexcept {
+        return plat.WriteToFile(ctx, static_cast<const uint8_t*>(ptr), len);
+    };
+    // 先驱码
+    if (write_file(magic_codes, sizeof(magic_codes))) {
+
+    }
+    return false;
+}
+
+/// <summary>
+/// Loads the bin file.
+/// </summary>
+/// <param name="ctx">The CTX.</param>
+/// <returns></returns>
+bool RichED::CEDTextDocument::LoadBinFile(CtxPtr ctx) noexcept {
+    uint32_t magic_codes[4];
+    auto& plat = this->platform;
+    const auto read_file = [&plat, ctx](void* ptr, uint32_t len) noexcept {
+        return plat.ReadFromFile(ctx, static_cast<uint8_t*>(ptr), len);
+    };
+    if (!read_file(magic_codes, sizeof(magic_codes))) return false;
+    if (magic_codes[0] != red_magic_code()) return false;
+    assert(magic_codes[1] == RED_ENDIAN_CODE && "NOT IMPL");
+    return false;
 }

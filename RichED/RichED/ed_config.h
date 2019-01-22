@@ -42,12 +42,8 @@ namespace RichED {
         TEXT_MERGE_LEN = 4,
     };
     // small object
-    struct CEDSmallObject {
-        /*
-        void* operator new( std::size_t count, const std::nothrow_t& tag) noexcept;
-        void operator delete( void* ptr, const std::nothrow_t& tag ) noexcept;
-        void operator delete( void* ptr) noexcept;
-        */
+    struct /*alignas()*/ CEDSmallObject {
+
     };
     // cell context, init-ed as null
     struct CellContext {

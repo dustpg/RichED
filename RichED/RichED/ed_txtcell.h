@@ -64,6 +64,8 @@ namespace RichED {
         void AsEOL() noexcept { m_meta.eol = true; }
         // !eol
         void ClearEOL() noexcept { m_meta.eol = false; }
+        // get extra info
+        auto GetExtraInfo() noexcept { return reinterpret_cast<InlineInfo*>(this + 1); }
     public:
         // split to 2 cells, return this if pos == 0, return next if pos >= len
         auto Split(uint32_t pos) noexcept->CEDTextCell*;
@@ -77,6 +79,9 @@ namespace RichED {
         void RemoveTextEx(Range) noexcept;
         // insert text
         void InsertText(uint32_t pos, U16View) noexcept;
+    protected:
+        // riched-data
+        RichData                m_riched;
     public:
         // document
         CEDTextDocument&        doc;
@@ -85,8 +90,6 @@ namespace RichED {
         // metrics
         CellMetrics             metrics;
     protected:
-        // riched-data
-        RichData                m_riched;
         // metainfo
         CellMeta                m_meta;
         // base string
@@ -94,7 +97,8 @@ namespace RichED {
     };
     // create a normal cell
     auto CreateNormalCell(CEDTextDocument& doc, const RichData&)->CEDTextCell*;
-    // create a cell for inline
+    // create a sharinked cell 
     auto CreateShrinkedCell(CEDTextDocument& doc, const RichData&)->CEDTextCell*;
+
 }
 

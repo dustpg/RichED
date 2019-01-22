@@ -55,8 +55,12 @@ namespace RichED {
         // is valid password
         virtual bool IsValidPassword(char32_t) noexcept = 0;
         // append text
-        virtual void AppendText(void* string, U16View view) noexcept = 0;
-        // recreate context [split?]
+        virtual void AppendText(CtxPtr ctx, U16View view) noexcept = 0;
+        // write to file
+        virtual bool WriteToFile(CtxPtr, const uint8_t data[], uint32_t len) noexcept = 0;
+        // read from file
+        virtual bool ReadFromFile(CtxPtr, uint8_t data[], uint32_t len) noexcept = 0;
+        // recreate context
         virtual void RecreateContext(CEDTextCell& cell) noexcept = 0;
         // delete context
         virtual void DeleteContext(CEDTextCell&) noexcept = 0;

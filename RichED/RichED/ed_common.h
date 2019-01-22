@@ -39,6 +39,8 @@
 
 // RichED namespace
 namespace RichED {
+    // context pointer
+    using CtxPtr = void*;
     // HandleOOM
     enum HandleOOM : uint32_t {
         // ignore
@@ -131,12 +133,10 @@ namespace RichED {
         Type_Ruby,
         // [   CEDTextCell   ] just one character under ruby
         Type_UnderRuby,
-        // [UnknownCell Class] image
+        // [   CEDTextCell++ ] image
         Type_Image,
-        // [UnknownCell Class] unknown inline object
+        // [   CEDTextCell++ ] unknown inline object
         Type_UnknownInline,
-
-
 
         // object start
         Type_InlineObject = Type_UnderRuby,
@@ -152,6 +152,8 @@ namespace RichED {
 namespace RichED {
     // cell
     class CEDTextCell;
+    // inline extra info
+    struct RED_RICHED_ALIGNED InlineInfo { char space_holder; };
     // point
     struct Point { unit_t x, y; };
     // size
@@ -182,7 +184,7 @@ namespace RichED {
         uint16_t            length;
         // string capacity
         uint16_t            capacity;
-        // string data
+        // string data, [1] as inline object extra-info length
         char16_t            data[2];
         // get left
         uint16_t Left() const noexcept { return capacity - length; }

@@ -94,8 +94,12 @@ namespace RichED {
         void SetPos(Point) noexcept;
         // resize doc view-zone
         void Resize(Size) noexcept;
+        // save to bin-file for self-use
+        bool SaveBinFile(CtxPtr) noexcept;
+        // load from bin-file for self-use
+        bool LoadBinFile(CtxPtr) noexcept;
         // gen text
-        void GenText(void* str, DocPoint begin, DocPoint end)noexcept;
+        void GenText(CtxPtr ctx, DocPoint begin, DocPoint end)noexcept;
         // get logic line count 
         auto GetLogicLineCount() const noexcept { return m_vLogic.GetSize(); }
         // get selection
@@ -119,8 +123,12 @@ namespace RichED {
         void EndOp() noexcept;
         // force set & update caret anchor
         void SetAnchorCaret(DocPoint anchor, DocPoint caret) noexcept;
+        // create inline object
+        auto CreateInlineObject(const InlineInfo&, int16_t len, CellType type) noexcept->CEDTextCell*;
         // insert inline object
         bool InsertInline(DocPoint, CEDTextCell&&) noexcept;
+        // insert inline object
+        bool InsertInline(DocPoint dp, CEDTextCell* p) noexcept { return p ? InsertInline(dp, std::move(*p)) : false; }
         // insert ruby
         bool InsertRuby(DocPoint, char32_t, U16View, const RichData* = nullptr) noexcept;
         // insert text, pos = min(DocPoint::pos, line-length)
@@ -225,6 +233,8 @@ namespace RichED {
         DocPoint                m_dpSelEnd;
         // undo op
         uint16_t                m_uUndoOp = 0;
+        // changed flag
+        uint16_t                m_flagChanged = 0;
         // unused
         uint16_t                m_unused_16x3[3];
         // head

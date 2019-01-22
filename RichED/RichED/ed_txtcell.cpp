@@ -6,6 +6,10 @@
 
 // namespace Riched::detail
 namespace RichED { namespace detail {
+    // is_2nd_surrogate
+    static inline bool is_2nd_surrogate(uint16_t ch) noexcept { return ((ch) & 0xFC00) == 0xDC00; }
+    // is_1st_surrogate
+    static inline bool is_1st_surrogate(uint16_t ch) noexcept { return ((ch) & 0xFC00) == 0xD800; }
     // clear all
     inline auto&clear_all(CEDTextDocument& doc, CEDTextCell* cell) noexcept {
         std::memset(cell, 0, sizeof(*cell));
@@ -78,7 +82,9 @@ namespace RichED {
 /// </summary>
 /// <returns></returns>
 void RichED::CEDTextCell::Dispose() noexcept {
-    delete this;
+    //delete this;
+    this->~CEDTextCell();
+    std::free(this);
 }
 
 /// <summary>
@@ -257,32 +263,43 @@ void RichED::CEDTextCell::InsertText(uint32_t pos, U16View view) noexcept {
 // ----------------------------------------------------------------------------
 
 namespace RichED {
-    // normal cell
-    struct CEDNormalTextCell : CEDTextCell {
-        // ctor
-        CEDNormalTextCell(CEDTextDocument&d, const RichData& red) 
-            noexcept : CEDTextCell(d, red) { m_string.capacity = TEXT_CELL_STR_MAXLEN; }
-        // string part b
-        FixedStringB        part2;
-    };
     // shrinked cell
-    struct CEDShrinkedTextCell : CEDTextCell {
+    struct CEDTextCellPublic : CEDTextCell {
         // ctor
-        CEDShrinkedTextCell(CEDTextDocument&d, const RichData& red)
-            noexcept : CEDTextCell(d, red) {
+        CEDTextCellPublic(CEDTextDocument&d, const RichData& red, uint32_t capacity) noexcept : CEDTextCell(d, red) {
+            m_string.capacity = TEXT_CELL_STR_MAXLEN;
         }
     };
+    PCN_NOINLINE
+    /// <summary>
+    /// Creates the cell.
+    /// </summary>
+    /// <param name="doc">The document.</param>
+    /// <param name="red">The red.</param>
+    /// <param name="capacity">The capacity.</param>
+    /// <param name="extra">The extra.</param>
+    /// <returns></returns>
+    auto CreatePublicCell(CEDTextDocument& doc, const RichData& red, 
+        uint32_t exlen, uint32_t capacity) noexcept -> CEDTextCell* {
+        auto& plat = doc.platform;
+        for (uint32_t i = 0; ; ++i) {
+            const size_t len = sizeof(CEDTextCellPublic) + exlen;
+            if (const auto ptr = std::malloc(len)) {
+                assert((uintptr_t(ptr) & (alignof(CEDTextCellPublic) - 1)) == 0);
+                return new (ptr)  CEDTextCellPublic{ doc, red, capacity };
+            }
+            if (plat.OnOOM(i) == OOM_Ignore) return nullptr;
+        }
+    }
     /// <summary>
     /// Creates the normal cell.
     /// </summary>
     /// <param name="doc">The document.</param>
     /// <returns></returns>
     auto CreateNormalCell(CEDTextDocument& doc, const RichData& red) -> CEDTextCell* {
-        auto& plat = doc.platform;
-        for (uint32_t i = 0; ; ++i) {
-            if (const auto obj = new(std::nothrow) CEDNormalTextCell{ doc, red }) return obj;
-            if (plat.OnOOM(i) == OOM_Ignore) return nullptr;
-        }
+        return CreatePublicCell(
+            doc, red, sizeof(FixedStringB), TEXT_CELL_STR_MAXLEN
+        );
     }
     /// <summary>
     /// Creates the shrinked cell.
@@ -291,10 +308,6 @@ namespace RichED {
     /// <param name="red">The red.</param>
     /// <returns></returns>
     auto RichED::CreateShrinkedCell(CEDTextDocument& doc, const RichData& red) -> CEDTextCell * {
-        auto& plat = doc.platform;
-        for (uint32_t i = 0; ; ++i) {
-            if (const auto obj = new(std::nothrow) CEDShrinkedTextCell{ doc, red }) return obj;
-            if (plat.OnOOM(i) == OOM_Ignore) return nullptr;
-        }
+        return CreatePublicCell(doc, red, sizeof(FixedStringB), 1);
     }
 }
