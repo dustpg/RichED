@@ -116,13 +116,11 @@ namespace RichED {
         //void SetWrapMode(WrapMode) noexcept;
         // get selection
         auto GetSelectionRange() const noexcept { return DocRange{ m_dpSelBegin, m_dpSelEnd }; }
-    public:
+    public: // Low level 
         // begin an operation for undo-stack
         void BeginOp() noexcept;
         // end an operation for undo-stack
         void EndOp() noexcept;
-        // force set & update caret anchor
-        void SetAnchorCaret(DocPoint anchor, DocPoint caret) noexcept;
         // create inline object
         auto CreateInlineObject(const InlineInfo&, int16_t len, CellType type) noexcept->CEDTextCell*;
         // insert inline object
@@ -132,7 +130,7 @@ namespace RichED {
         // insert ruby
         bool InsertRuby(DocPoint, char32_t, U16View, const RichData* = nullptr) noexcept;
         // insert text, pos = min(DocPoint::pos, line-length)
-        auto InsertText(DocPoint, U16View, bool behind =false) noexcept ->DocPoint;
+        auto InsertText(DocPoint, U16View, bool behind =true) noexcept ->DocPoint;
         // remove text, pos = min(DocPoint::pos, line-length)
         bool RemoveText(DocPoint begin, DocPoint end) noexcept;
     public: // Rich Text Format
@@ -158,6 +156,13 @@ namespace RichED {
         // set italic
         bool SetItalic(DocPoint begin, DocPoint end, FlagSet set) noexcept {
             return set_flags(begin, end, FFlags_Italic, set | set_fflags); }
+    public: // UndoRedo-call-level 
+        // force set & update caret anchor
+        void SetAnchorCaret(DocPoint anchor, DocPoint caret) noexcept;
+        // Rank-Up-Magic for ruby
+        void RankUpMagic(DocPoint, uint32_t) noexcept;
+        // Rank-Up-Magic for objs
+        void RankUpMagic(DocPoint, const InlineInfo&, int16_t len, CellType type) noexcept;
     public: // GUI Operation, return false on gui-level mistake
         // gui: l-button up
         //bool GuiLButtonUp(Point pt) noexcept;

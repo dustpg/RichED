@@ -203,16 +203,18 @@ namespace RichED {
         const auto end_itr = reinterpret_cast<ObjectSingeOp*>(end_ptr);
         while (obj < end_itr) {
             assert(obj->Next() <= end_itr);
-            //assert(!!obj->ruby_length != !!obj->extra_length);
+            assert(!!obj->ruby_length != !!obj->extra_length || (!obj->ruby_length && !obj->extra_length));
             // 注音符号： 将范围字符转换为被注音, 然后后面指定长度为注音
             if (obj->ruby_length) {
-
+                // 升阶魔法! RUM!
+                doc.RankUpMagic(obj->begin, obj->ruby_length);
             }
             // 其他内联对象: 利用EXTRA-INFO创建内联对象
             else if (obj->extra_length) {
-
+                // 升阶魔法! RUM!
+                const auto info = reinterpret_cast<InlineInfo*>(obj + 1);
+                doc.RankUpMagic(obj->begin, *info, obj->extra_length, obj->cell_type);
             }
-            //assert(!"NOT IMPL");
             obj = obj->Next();
         }
     }
@@ -281,7 +283,7 @@ namespace RichED {
     // execute text
     void ExecuteText(CEDTextDocument& doc, TrivialUndoRedo& op) noexcept {
         const auto data = reinterpret_cast<TextGroupOp*>(&op + 1);
-        doc.InsertText(data->begin, { data->text, data->text + data->length });
+        doc.InsertText(data->begin, { data->text, data->text + data->length }, true);
     }
 }
 

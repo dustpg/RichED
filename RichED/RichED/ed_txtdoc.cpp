@@ -302,7 +302,7 @@ namespace RichED { namespace impl {
 // this namesapce
 namespace RichED {
     // init matrix
-    void InitMatrix(DocMatrix& matrix) noexcept;
+    void InitMatrix(DocMatrix& matrix, Direction read, Direction flow) noexcept;
     // check range
     struct CheckRangeCtx {
         CellPoint   begin;
@@ -448,7 +448,7 @@ RichED::CEDTextDocument::CEDTextDocument(IEDTextPlatform& plat, const DocInitArg
 : platform(plat) {
     // 初始化
     this->default_riched = arg.riched;
-    RichED::InitMatrix(m_matrix);
+    RichED::InitMatrix(m_matrix, arg.read, arg.flow);
     // 默认使用CRLF
     m_linefeed.AsCRLF();
     // 初始化相关数据
@@ -650,6 +650,91 @@ void RichED::CEDTextDocument::SetAnchorCaret(
     Private::UpdateSelection(*this, m_dpCaret, m_dpAnchor);
 }
 
+
+/// <summary>
+/// Ranks up magic for RUBY
+/// </summary>
+/// <param name="dp">The dp.</param>
+/// <param name="len">The length.</param>
+/// <returns></returns>
+void RichED::CEDTextDocument::RankUpMagic(DocPoint dp, uint32_t len) noexcept {
+    //return;
+
+    if (dp.line < m_vLogic.GetSize()) {
+        const auto data = m_vLogic[dp.line];
+        if (dp.pos < data.length) {
+            auto cell = data.first;
+            auto pos = dp.pos;
+            detail::find_cell2_txtoff_ex(cell, pos);
+            Private::Dirty(*this, *cell, dp.line);
+            assert(pos < cell->RefString().length);
+            // 单字
+            uint32_t end_pos = pos + 1;
+            // 双字
+            if (detail::is_1st_surrogate(cell->RefString().data[pos]))
+                end_pos++;
+            if (!cell->Split(end_pos)) return;
+            if (cell = cell->Split(pos)) {
+                // RANK UP!
+                const_cast<CellType&>(cell->RefMetaInfo().metatype) = Type_UnderRuby;
+                auto& str = const_cast<FixedStringA&>(cell->RefString());
+                str.capacity = str.length;
+                cell->AsDirty();
+                // 后面标记为注音
+                while (!cell->RefMetaInfo().eol) {
+                    cell = detail::next_cell(cell);
+                    if (len <= cell->RefString().length) {
+                        cell->Split(len);
+                        const_cast<CellType&>(cell->RefMetaInfo().metatype) = Type_Ruby;
+                        break;
+                    }
+                    len -= cell->RefString().length;
+                    const_cast<CellType&>(cell->RefMetaInfo().metatype) = Type_Ruby;
+                }
+            }
+            return;
+        }
+    }
+    assert(!"OUT OF RANGE");
+}
+
+/// <summary>
+/// Ranks up magic.
+/// </summary>
+/// <param name="dp">The dp.</param>
+/// <param name="info">The information.</param>
+/// <param name="len">The length.</param>
+/// <param name="type">The type.</param>
+/// <returns></returns>
+void RichED::CEDTextDocument::RankUpMagic(
+    DocPoint dp, const InlineInfo& info, int16_t len, CellType type) noexcept {
+    if (dp.line < m_vLogic.GetSize()) {
+        auto& data = m_vLogic[dp.line];
+        if (dp.pos < data.length) {
+            // 遍历至指定地点
+            const auto next_is_first = data.first->prev;
+            auto cell = data.first;
+            auto pos = dp.pos;
+            detail::find_cell2_txtoff_ex(cell, pos);
+            Private::Dirty(*this, *cell, dp.line);
+            assert(pos < cell->RefString().length);
+            // 分离对象
+            if (!cell->Split(pos + 1)) return;
+            // 创建对象
+            const auto obj = this->CreateInlineObject(info, len, type);
+            if (!obj) return;
+            // EOL信息
+            cell->MoveEOL(*obj);
+            RichED::InsertAfterFirst(*cell, *obj);
+            cell->RemoveTextEx({ pos , 1 });
+            // 防止失效
+            data.first = detail::next_cell(next_is_first);
+            return;
+        }
+    }
+    assert(!"OUT OF RANGE");
+}
+
 /// <summary>
 /// Creates the inline object.
 /// </summary>
@@ -668,7 +753,7 @@ auto RichED::CEDTextDocument::CreateInlineObject(
         str.length = str.capacity = 1;
         str.data[0] = ' ';
         str.data[1] = len;
-
+        ptr->AsDirty();
     }
     return ptr;
 }
@@ -1753,7 +1838,7 @@ bool RichED::CEDTextDocument::Private::Insert(
     }
     // 插在后面
     else {
-        // BEHIND模式[EOL不算数]
+        // BEHIND模式[仅EOL不算数]
         if (behind && !cell->RefMetaInfo().eol) {
             // 插入最后面
             if (cell->next == &doc.m_tail) {
@@ -1970,8 +2055,6 @@ bool RichED::CEDTextDocument::Private::Insert(
 /// <returns></returns>
 void RichED::CEDTextDocument::Private::RecordObjs(
     CEDTextDocument & doc, DocPoint begin, const CheckRangeCtx& ctx) noexcept {
-    // 注音至少需要两个CELL
-    if (ctx.begin.cell == ctx.end.cell) return;
     // 修改begin
     const auto change_begin = [&]() noexcept {
         const auto cell = ctx.begin.cell;
@@ -1984,7 +2067,8 @@ void RichED::CEDTextDocument::Private::RecordObjs(
     const auto end_cell = ctx.end.offset == ctx.end.cell->RefString().length
         ? detail::next_cell(ctx.end.cell) : ctx.end.cell
         ;
-    if (start_cell->next == end_cell) return;
+    if (start_cell == end_cell->next) return;
+    if (start_cell == end_cell) return;
 
     const auto real_begin = begin;
     const auto cfor = detail::cfor_cells(start_cell, end_cell);
@@ -2002,24 +2086,24 @@ void RichED::CEDTextDocument::Private::RecordObjs(
     };
 
     // 第一次遍历, 计算所需缓冲区长度
-    uint32_t ruby_count = 0, other_count = 0;
+    uint32_t objs_count = 0, extra_len = 0;
     for_it([&](CEDTextCell* object, DocPoint) noexcept {
-        // 注音
-       if (object->RefMetaInfo().metatype == Type_UnderRuby)
-           ++ruby_count;
-       // 其他内联
-       else {
+        ++objs_count;
+        // 其他内联
+       if (object->RefMetaInfo().metatype != Type_UnderRuby) {
            // 默认以8字节对齐
            constexpr uint32_t aligned_size = alignof(TrivialUndoRedo);
            constexpr uint32_t aligned_mask = ~(aligned_size - 1);
            const auto length = uint32_t(object->RefString().data[1]);
            assert(length > 0);
            const uint32_t aligned_len = (length + (aligned_size - 1)) & aligned_mask;
-           other_count += aligned_len;
+           extra_len += aligned_len;
        }
     }, real_begin);
+    // 没有
+    if (!objs_count) return;
     // 申请数据
-    const auto data = impl::objs_undoredo(ruby_count, other_count);
+    const auto data = impl::objs_undoredo(objs_count, extra_len);
     // TODO: OOM处理, 撤销出现OOM应该释放全部撤销信息
     if (!data) return;
     auto obj = impl::objs_as_remove(data, doc.m_uUndoOp++);
@@ -2045,72 +2129,6 @@ void RichED::CEDTextDocument::Private::RecordObjs(
     // 添加
     const auto op = reinterpret_cast<TrivialUndoRedo*>(data);
     doc.m_undo.AddOp(doc, *op);
-
-    /*const auto last_cell = detail::prev_cell(end_cell);
-    // 遍历用模板函数
-    const auto for_it = [cfor, last_cell](auto call) noexcept {
-        CEDTextCell* under_ruby = nullptr;
-        for (auto& cell : cfor) {
-            if (under_ruby) {
-                CEDTextCell* last_ruby = detail::prev_cell(&cell);
-                if (cell.RefMetaInfo().eol || &cell == last_cell) 
-                    last_ruby = cell.RefMetaInfo().metatype == Type_Ruby ? &cell : detail::prev_cell(&cell);
-                else if (cell.RefMetaInfo().metatype == Type_Ruby)
-                    continue;
-                // 只有一个不算数
-                if (under_ruby != last_ruby) call(under_ruby, last_ruby);
-                under_ruby = nullptr;
-            }
-            else {
-                if (cell.RefMetaInfo().metatype == Type_UnderRuby)
-                    under_ruby = &cell;
-            }
-        }
-    };
-    uint32_t ruby_counter = 0, text_counter = 0;
-    // 第一次遍历, 计算所需缓冲区长度
-    for_it([&](CEDTextCell* under_ruby, CEDTextCell* last_ruby) noexcept {
-        ++ruby_counter;
-        // 字符串默认以8字节对齐
-        constexpr uint32_t aligned_size = alignof(TrivialUndoRedo) / sizeof(char16_t);
-        constexpr uint32_t aligned_mask = ~(aligned_size - 1);
-        const auto cfor = detail::cfor_cells(under_ruby, last_ruby);
-        for (auto& cell : cfor) {
-            auto& ruby = *detail::next_cell(&cell);
-            const uint32_t length = ruby.RefString().length;
-            const uint32_t aligned_len = (length + (aligned_size - 1)) & aligned_mask;
-            text_counter += aligned_len;
-        }
-    });
-    // 申请数据
-    const auto data = impl::ruby_undoredo(ruby_counter, text_counter);
-    // TODO: OOM处理, 撤销出现OOM应该释放全部撤销信息
-    if (!data) return;
-    auto obj = impl::ruby_as_remove(data, doc.m_uUndoOp++);
-
-    uint32_t index = 0;
-    // 第二次遍历, 生成OP数据
-    for_it([=](CEDTextCell* under_ruby, CEDTextCell* last_ruby) mutable noexcept {
-        auto& under_str = under_ruby->RefString();
-        char32_t ch = under_str.data[0];
-        if (under_str.length == 2)
-            ch = detail::char16x2to32(under_str.data[0], under_str.data[1]);
-        // 开始处理
-        impl::ruby_set_begin(obj, ch, begin, under_ruby->RefRichED());
-        const auto cfor = detail::cfor_cells(under_ruby, last_ruby);
-        force_zero(*under_ruby);
-        // 追加注音信息
-        for (auto& cell : cfor) {
-            auto& ruby = *detail::next_cell(&cell);
-            impl::ruby_set_goon(obj, ruby.View());
-            force_zero(ruby);
-        };
-        // 下一个
-        obj = impl::ruby_get_next(obj);
-    });
-    // 添加
-    const auto op = reinterpret_cast<TrivialUndoRedo*>(data);
-    doc.m_undo.AddOp(doc, *op);*/
 }
 
 
@@ -2186,9 +2204,11 @@ void RichED::CEDTextDocument::Private::RecordRich(
     // 删除富属
     impl::rich_as_remove(data, doc.m_uUndoOp++);
     // 换行
-    if (ctx.begin.cell->RefMetaInfo().eol) {
-        begin.line++;
-        begin.pos = 0;
+    if (ctx.begin.cell != cell1) {
+        if (ctx.begin.cell->RefMetaInfo().eol) {
+            begin.line++;
+            begin.pos = 0;
+        }
     }
     // 遍历
     auto end = begin; uint32_t index = 0;
@@ -2879,7 +2899,10 @@ void RichED::CEDTextDocument::Private::ValueChanged(
 
 namespace RichED {
     // matrix init
-    void InitMatrix(DocMatrix& matrix) noexcept {
+    void InitMatrix(DocMatrix& matrix, Direction read, Direction flow) noexcept {
+        matrix.read_direction = read;
+        matrix.flow_direction = flow;
+        assert((read ^ flow) & 1 == 1);
         // 方向键映射逻辑方向
         matrix.left_mapper  = impl::mode_logicleft;
         matrix.up_mapper    = impl::mode_logicup;

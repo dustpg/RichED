@@ -141,6 +141,17 @@ namespace RichED {
         // object start
         Type_InlineObject = Type_UnderRuby,
     };
+    // direction
+    enum Direction : uint16_t {
+        // left to right
+        Direction_L2R = 0,
+        // top to bottom
+        Direction_T2B,
+        // right to left
+        Direction_R2L,
+        // bottom to top
+        Direction_B2T,
+    };
 }
 
 
@@ -264,6 +275,10 @@ namespace RichED {
         };
         // < 0 for failed
         int32_t   mutable   code;
+        // read direction
+        Direction           read;
+        // flow direcion
+        Direction           flow;
         // flags
         DocFlag             flags;
         // password char
@@ -296,6 +311,7 @@ namespace RichED {
         // display line-num end
         uint32_t        display_line_end;
 
+
         // flags
         DocFlag         flags;
         // password char
@@ -313,6 +329,10 @@ namespace RichED {
     };
     // doc matrix
     struct DocMatrix {
+        // read direction
+        Direction       read_direction;
+        // flowdirection
+        Direction       flow_direction;
         // left mapper
         uint16_t        left_mapper;
         // up mapper

@@ -71,6 +71,8 @@ namespace RichED {
         auto Split(uint32_t pos) noexcept->CEDTextCell*;
         // split to 2 cells, return this if pos == 0, create new if pos >= len
         auto SplitEx(uint32_t pos) noexcept->CEDTextCell*;
+        // move eol to cell
+        void MoveEOL(CEDTextCell& cell) noexcept;
         // merge this with next cell, return true if success
         bool MergeWithNext() noexcept;
         // remove text

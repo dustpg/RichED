@@ -139,6 +139,17 @@ auto RichED::CEDTextCell::Split(uint32_t pos) noexcept -> CEDTextCell * {
     return this->SplitEx(pos);
 }
 
+
+/// <summary>
+/// Moves the eol.
+/// </summary>
+/// <param name="cell">The cell.</param>
+/// <returns></returns>
+void RichED::CEDTextCell::MoveEOL(CEDTextCell & cell) noexcept {
+    cell.m_meta.eol = m_meta.eol;
+    m_meta.eol = false;
+}
+
 /// <summary>
 /// Splits the specified position.
 /// </summary>
@@ -153,7 +164,7 @@ auto RichED::CEDTextCell::SplitEx(uint32_t pos) noexcept -> CEDTextCell* {
         m_meta.eol = false;
         // 复制文本
         if (pos < m_string.length) {
-            assert(m_meta.metatype == Type_Normal && "cannot split this");
+            assert(m_meta.metatype < Type_UnderRuby && "cannot split this");
             const auto len_after = m_string.length - pos;
             cell->InsertText(0, {
                 m_string.data + pos,

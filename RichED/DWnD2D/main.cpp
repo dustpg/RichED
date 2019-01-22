@@ -1,10 +1,12 @@
-﻿#include "common.h"
+﻿#include "../common/common.h"
 
 // DWnD2D
 #include <d2d1_1.h>
 #include <dwrite_1.h>
+#include <wincodec.h>
 #pragma comment(lib, "d2d1.lib")
 #pragma comment(lib, "dwrite.lib")
+#pragma comment(lib, "windowscodecs.lib")
 
 
 
@@ -12,11 +14,11 @@ enum { WINDOW_WIDTH = 1280, WINDOW_HEIGHT = 720 };
 static const wchar_t WINDOW_TITLE[] = L"RichED - DWnD2D";
 enum { ECODE_FAILED = -1, ECODE_OOM = -2, ECODE_DRAW = -3, ECODE_RESIZE = -4 };
 
-enum { DEF_FONT_SIZE = 24 };
+enum { DEF_FONT_SIZE = 42 };
 
 enum { CTRL_X = 100, CTRL_Y = 100,  };
 
-float ctrl_w = 300, ctrl_h = 300;
+float ctrl_w = 800, ctrl_h = 600;
 
 static const wchar_t* const FONT_NAME_LIST[] = {
      L"Arial",
@@ -26,12 +28,21 @@ static const wchar_t* const FONT_NAME_LIST[] = {
 };
 
 
+auto LoadBitmapFromFile(
+    ID2D1RenderTarget* pRenderTarget,
+    IWICImagingFactory* pIWICFactory,
+    PCWSTR uri,
+    ID2D1Bitmap** ppBitmap
+) noexcept->HRESULT;
+
 struct RED_RICHED_ALIGNED DWnD2DImageExtraInfo {
     wchar_t             uri[4096];
 };
 
 struct DWnD2DDataField {
     HWND                    hwnd;
+    // WIC
+    IWICImagingFactory*     wic_factory;
     // DW
     IDWriteFactory1*        dw1_factory;
     IDWriteTextFormat*      dw1_deffont;
@@ -71,14 +82,22 @@ struct WinDWnD2D final : IEDTextPlatform {
     }
     // recreate context
     void RecreateContext(CEDTextCell& cell) noexcept override;
+    // recreate context image
+    void RecreateContextImage(CEDTextCell& cell) noexcept;
     // delete context
     void DeleteContext(CEDTextCell&) noexcept override;
     // draw context
     void DrawContext(CEDTextCell&, unit_t y) noexcept override;
+    // draw context image
+    void DrawContextImage(CEDTextCell&, unit_t y) noexcept;
     // hittest the cell
     auto HitTest(CEDTextCell&, unit_t offset) noexcept->CellHitTest override;
+    // hittest the image
+    auto HitTestImage(CEDTextCell&, unit_t offset) noexcept->CellHitTest;
     // cm
     auto GetCharMetrics(CEDTextCell&, uint32_t offset) noexcept->CharMetrics override;
+    // cm
+    auto GetCharMetricsImage(CEDTextCell&, uint32_t offset) noexcept->CharMetrics ;
 #ifndef NDEBUG
     // debug output
     void DebugOutput(const char*) noexcept override;
@@ -136,6 +155,7 @@ int main() {
     MemoryLeakDetector leak;
     // DPIAware
     ::SetProcessDPIAware();
+    ::CoInitialize(nullptr);
     // 注册窗口
     WNDCLASSEXW wcex = { sizeof(WNDCLASSEXW) };
     wcex.style = CS_HREDRAW | CS_VREDRAW;
@@ -179,6 +199,7 @@ int main() {
         }
     }
     g_platform.Clear();
+    ::CoUninitialize();
     return 0;
 }
 
@@ -207,7 +228,8 @@ bool WinDWnD2D::Init(HWND hwnd) noexcept {
     HRESULT hr = S_OK;
     if (SUCCEEDED(hr)) {
         DocInitArg arg = {
-            0, Flag_RichText | Flag_MultiLine, '*', 0xffffff, 0,
+            0, Direction_L2R, Direction_T2B,
+            Flag_RichText | Flag_MultiLine, '*', 0xffffff, 0,
             VAlign_Baseline, Mode_SpaceOrCJK,
             { DEF_FONT_SIZE, 0, 0, Effect_None } 
         };
@@ -217,14 +239,41 @@ bool WinDWnD2D::Init(HWND hwnd) noexcept {
     }
     // 初文字
     if (SUCCEEDED(hr)) {
+        const auto create_img = [this](const wchar_t uri[]) noexcept {
+            CEDTextCell* cell = nullptr;
+            DWnD2DImageExtraInfo info;
+            const auto l = std::wcslen(uri);
+            if (l * sizeof(wchar_t) < sizeof(info.uri)) {
+                const size_t bytelen = sizeof(wchar_t) * (l + 1);
+                std::memcpy(info.uri, uri, bytelen);
+                const auto ptr = reinterpret_cast<InlineInfo*>(&info);
+                assert(bytelen < 30000);
+                const int16_t bytelen16 = static_cast<int16_t>(bytelen);
+                cell = this->Doc().CreateInlineObject(*ptr, bytelen16, Type_Image);
+            }
+            return cell;
+        };
+
+
+        this->Doc().InsertInline({ 0, 0 }, create_img(L"../common/2.png"));
         this->Doc().InsertText({ 0, 0 }, u"国人发明的"_red);
         this->Doc().InsertRuby({ 0, 0 }, U'韩', u"宇宙"_red);
         this->Doc().InsertText({ 0, 0 }, u"字没准儿是"_red);
         //this->Doc().SetFontName({ 0, 1 }, { 0, 4 }, 2);
-        this->Doc().SetFontSize({ 0, 3 }, { 0, 4 }, 16);
+        this->Doc().SetFontSize({ 0, 3 }, { 0, 4 }, DEF_FONT_SIZE/2);
         //this->Doc().InsertText({ 0, 0 }, u"😂😂😂😂😂"_red);
         this->Doc().InsertRuby({ 0, 0 }, U'汉', u"hàn"_red);
         this->Doc().InsertText({ 0, 0 }, u"Hello, World!\r\n泥壕世界!\n"_red);
+    }
+    // 创建 WIC 工厂.
+    if (SUCCEEDED(hr)) {
+        hr = ::CoCreateInstance(
+            CLSID_WICImagingFactory,
+            nullptr,
+            CLSCTX_INPROC_SERVER,
+            IID_IWICImagingFactory,
+            reinterpret_cast<void**>(&d.wic_factory)
+        );
     }
     // 创建DWrite工厂
     if (SUCCEEDED(hr)) {
@@ -313,6 +362,7 @@ void WinDWnD2D::Clear() noexcept {
     ::SafeRelease(this->data.d2d_cell2);
     ::SafeRelease(this->data.d2d_rendertarget);
     ::SafeRelease(this->data.d2d_factory);
+    ::SafeRelease(this->data.wic_factory);
 }
 
 
@@ -557,6 +607,9 @@ LRESULT WinDWnD2D::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
 /// <param name="prev">The previous.</param>
 /// <returns></returns>
 void WinDWnD2D::RecreateContext(CEDTextCell& cell) noexcept {
+    // 图片
+    if (cell.RefMetaInfo().metatype == Type_Image)
+        return this->RecreateContextImage(cell);
     // 释放之前的布局
     const auto prev_layout = reinterpret_cast<IDWriteTextLayout*>(cell.ctx.context);
     cell.ctx.context = nullptr;
@@ -649,6 +702,39 @@ void WinDWnD2D::RecreateContext(CEDTextCell& cell) noexcept {
     fmt->Release();
 }
 
+void WinDWnD2D::RecreateContextImage(CEDTextCell & cell) noexcept {
+    // 释放之前的图片
+    auto& prev_bitmap  = reinterpret_cast<ID2D1Bitmap*&>(cell.ctx.context);
+    if (prev_bitmap) {
+        assert(!"???");
+        prev_bitmap->Release();
+    }
+    prev_bitmap = nullptr;
+    const auto info = cell.GetExtraInfo();
+    const auto extra = reinterpret_cast<DWnD2DImageExtraInfo*>(info);
+    const auto code = LoadBitmapFromFile(
+        this->data.d2d_rendertarget,
+        this->data.wic_factory,
+        extra->uri,
+        &prev_bitmap
+    );
+    if (cell.RefMetaInfo().dirty) {
+        float width = 32.f, height = 32.f;
+        if (prev_bitmap) {
+            const auto s = prev_bitmap->GetSize();
+            width = s.width;
+            height = s.height;
+        }
+        this->Doc().VAlignHelperH(height*0.88f, height, cell.metrics);
+        cell.metrics.width = width;
+        cell.metrics.bounding.left = 0;
+        cell.metrics.bounding.top = 0;
+        cell.metrics.bounding.right = width;
+        cell.metrics.bounding.bottom = height;
+        cell.AsClean();
+    }
+}
+
 /// <summary>
 /// Deletes the context.
 /// </summary>
@@ -670,6 +756,9 @@ void WinDWnD2D::DeleteContext(CEDTextCell& cell) noexcept {
 void WinDWnD2D::DrawContext(CEDTextCell& cell, unit_t baseline) noexcept {
     // 睡眠状态则唤醒
     if (!cell.ctx.context) this->RecreateContext(cell);
+    // 图片
+    if (cell.RefMetaInfo().metatype == Type_Image)
+        return DrawContextImage(cell, baseline);
     D2D1_POINT_2F point;
     point.x = cell.metrics.pos + cell.metrics.offset.x;
     // 失败则不渲染
@@ -705,6 +794,24 @@ void WinDWnD2D::DrawContext(CEDTextCell& cell, unit_t baseline) noexcept {
 
 
 /// <summary>
+/// Draws the context image.
+/// </summary>
+/// <param name="">The .</param>
+/// <param name="y">The y.</param>
+/// <returns></returns>
+void WinDWnD2D::DrawContextImage(CEDTextCell & cell, unit_t baseline) noexcept {
+    if (const auto ptr = static_cast<ID2D1Bitmap*>(cell.ctx.context)) {
+        D2D1_RECT_F rect;
+        rect.left = cell.metrics.pos + cell.metrics.offset.x;
+        rect.top = baseline - cell.metrics.ar_height + cell.metrics.offset.y;
+        rect.right = cell.metrics.width + rect.left;
+        rect.bottom = cell.metrics.ar_height + cell.metrics.dr_height + rect.top;
+        const auto renderer = this->data.d2d_rendertarget;
+        renderer->DrawBitmap(ptr, &rect);
+    }
+}
+
+/// <summary>
 /// Values the changed.
 /// </summary>
 /// <param name="changed">The changed.</param>
@@ -731,6 +838,18 @@ void WinDWnD2D::ValueChanged(Changed changed) noexcept {
     }
 }
 
+/// <summary>
+/// Hits the test image.
+/// </summary>
+/// <param name="">The .</param>
+/// <param name="offset">The offset.</param>
+/// <returns></returns>
+auto WinDWnD2D::HitTestImage(CEDTextCell & cell, unit_t offset) noexcept -> CellHitTest {
+    CellHitTest rv = { 0, 0, 1 };
+    if (offset >= cell.metrics.width * 0.5)
+        rv.pos = 1;
+    return rv;
+}
 
 /// <summary>
 /// Hits the test.
@@ -739,6 +858,8 @@ void WinDWnD2D::ValueChanged(Changed changed) noexcept {
 /// <param name="offset">The offset.</param>
 /// <returns></returns>
 auto WinDWnD2D::HitTest(CEDTextCell& cell, unit_t offset) noexcept->CellHitTest {
+    if (cell.RefMetaInfo().metatype == Type_Image)
+        return HitTestImage(cell, offset);
     CellHitTest rv = { 0 };
     // 睡眠状态则唤醒
     if (!cell.ctx.context) this->RecreateContext(cell);
@@ -755,12 +876,33 @@ auto WinDWnD2D::HitTest(CEDTextCell& cell, unit_t offset) noexcept->CellHitTest 
 }
 
 /// <summary>
+/// Gets the character metrics image.
+/// </summary>
+/// <param name="cell">The cell.</param>
+/// <param name="offset">The offset.</param>
+/// <returns></returns>
+auto WinDWnD2D::GetCharMetricsImage(CEDTextCell& cell, uint32_t pos) noexcept -> CharMetrics {
+    CharMetrics cm;
+    if (pos) {
+        cm.offset = cell.metrics.width;
+        cm.width = 0;
+    }
+    else {
+        cm.offset = 0;
+        cm.width = cell.metrics.width;
+    }
+    return cm;
+}
+
+/// <summary>
 /// Gets the character metrics.
 /// </summary>
 /// <param name="cell">The cell.</param>
 /// <param name="offset">The offset.</param>
 /// <returns></returns>
 auto WinDWnD2D::GetCharMetrics(CEDTextCell& cell, uint32_t pos) noexcept -> CharMetrics {
+    if (cell.RefMetaInfo().metatype == Type_Image)
+        return GetCharMetricsImage(cell, pos);
     CharMetrics cm = { 0 };
     // 睡眠状态则唤醒
     if (!cell.ctx.context) this->RecreateContext(cell);
@@ -873,4 +1015,59 @@ void WinDWnD2D::Render() noexcept {
     const auto hr = renderer->EndDraw();
 
     if (FAILED(hr)) std::exit(ECODE_DRAW);
+}
+
+
+
+auto LoadBitmapFromFile(
+    ID2D1RenderTarget* pRenderTarget,
+    IWICImagingFactory* pIWICFactory,
+    PCWSTR uri,
+    ID2D1Bitmap** ppBitmap
+) noexcept -> HRESULT {
+    IWICBitmapDecoder *pDecoder = nullptr;
+    IWICBitmapFrameDecode *pSource = nullptr;
+    IWICStream *pStream = nullptr;
+    IWICFormatConverter *pConverter = nullptr;
+    IWICBitmapScaler *pScaler = nullptr;
+
+    HRESULT hr = pIWICFactory->CreateDecoderFromFilename(
+        uri,
+        nullptr,
+        GENERIC_READ,
+        WICDecodeMetadataCacheOnLoad,
+        &pDecoder
+    );
+
+    if (SUCCEEDED(hr)) {
+        hr = pDecoder->GetFrame(0, &pSource);
+    }
+    if (SUCCEEDED(hr)) {
+        hr = pIWICFactory->CreateFormatConverter(&pConverter);
+    }
+
+
+    if (SUCCEEDED(hr)) {
+        hr = pConverter->Initialize(
+            pSource,
+            GUID_WICPixelFormat32bppPBGRA,
+            WICBitmapDitherTypeNone,
+            nullptr,
+            0.f,
+            WICBitmapPaletteTypeMedianCut
+        );
+    }
+    if (SUCCEEDED(hr)) {
+        hr = pRenderTarget->CreateBitmapFromWicBitmap(
+            pConverter,
+            nullptr,
+            ppBitmap
+        );
+    }
+    ::SafeRelease(pDecoder);
+    ::SafeRelease(pSource);
+    ::SafeRelease(pStream);
+    ::SafeRelease(pConverter);
+    ::SafeRelease(pScaler);
+    return hr;
 }
