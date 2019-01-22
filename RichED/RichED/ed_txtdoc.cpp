@@ -2902,7 +2902,7 @@ namespace RichED {
     void InitMatrix(DocMatrix& matrix, Direction read, Direction flow) noexcept {
         matrix.read_direction = read;
         matrix.flow_direction = flow;
-        assert((read ^ flow) & 1 == 1);
+        assert(((read ^ flow) & 1) == 1);
         // 方向键映射逻辑方向
         matrix.left_mapper  = impl::mode_logicleft;
         matrix.up_mapper    = impl::mode_logicup;

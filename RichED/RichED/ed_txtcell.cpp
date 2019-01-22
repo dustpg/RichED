@@ -2,6 +2,7 @@
 #include "ed_txtplat.h"
 #include "ed_txtcell.h"
 #include <cstring>
+#include <new>
 
 
 // namespace Riched::detail
@@ -297,7 +298,7 @@ namespace RichED {
             const size_t len = sizeof(CEDTextCellPublic) + exlen;
             if (const auto ptr = std::malloc(len)) {
                 assert((uintptr_t(ptr) & (alignof(CEDTextCellPublic) - 1)) == 0);
-                return new (ptr)  CEDTextCellPublic{ doc, red, capacity };
+                return new(ptr) CEDTextCellPublic{ doc, red, capacity };
             }
             if (plat.OnOOM(i) == OOM_Ignore) return nullptr;
         }
