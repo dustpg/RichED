@@ -329,6 +329,10 @@ namespace RichED {
     };
     // doc matrix
     struct DocMatrix {
+        // doc to screen
+        unit_t          d2s_matrix[6];
+        // screen to doc
+        unit_t          s2d_matrix[6];
         // read direction
         Direction       read_direction;
         // flowdirection
@@ -341,6 +345,10 @@ namespace RichED {
         uint16_t        right_mapper;
         // down mapper
         uint16_t        down_mapper;
+        // doc to screen
+        auto DocToScreen(Point) const noexcept ->Point;
+        // screen to doc
+        auto ScreenToDoc(Point) const noexcept->Point;
     };
 }
 

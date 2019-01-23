@@ -88,12 +88,16 @@ struct WinDWnD2D final : IEDTextPlatform {
     void DeleteContext(CEDTextCell&) noexcept override;
     // draw context
     void DrawContext(CEDTextCell&, unit_t y) noexcept override;
+    // map! 
+    void Map(float[2]) noexcept;
+    // map! 
+    void Map(float a[2], float b[2]) noexcept { Map(a); Map(b); }
     // draw context image
     void DrawContextImage(CEDTextCell&, unit_t y) noexcept;
     // hittest the cell
     auto HitTest(CEDTextCell&, unit_t offset) noexcept->CellHitTest override;
-    // hittest the image
-    auto HitTestImage(CEDTextCell&, unit_t offset) noexcept->CellHitTest;
+    // hittest the object
+    auto HitTestObject(CEDTextCell&, unit_t offset) noexcept->CellHitTest;
     // cm
     auto GetCharMetrics(CEDTextCell&, uint32_t offset) noexcept->CharMetrics override;
     // cm
@@ -141,6 +145,12 @@ struct WinDWnD2D final : IEDTextPlatform {
 
 } g_platform;
 
+
+void WinDWnD2D::Map(float point [2]) noexcept {
+    auto& matrix = this->Doc().RefMatrix();
+    const auto ptr = reinterpret_cast<RichED::Point*>(point);
+    *ptr = matrix.DocToScreen(*ptr);
+}
 
 
 template<class Interface>
@@ -229,6 +239,7 @@ bool WinDWnD2D::Init(HWND hwnd) noexcept {
     if (SUCCEEDED(hr)) {
         DocInitArg arg = {
             0, Direction_L2R, Direction_T2B,
+            //0, Direction_T2B, Direction_R2L,
             Flag_RichText | Flag_MultiLine, '*', 0xffffff, 0,
             VAlign_Baseline, Mode_SpaceOrCJK,
             { DEF_FONT_SIZE, 0, 0, Effect_None } 
@@ -257,10 +268,10 @@ bool WinDWnD2D::Init(HWND hwnd) noexcept {
 
         this->Doc().InsertInline({ 0, 0 }, create_img(L"../common/2.png"));
         this->Doc().InsertText({ 0, 0 }, u"国人发明的"_red);
-        this->Doc().InsertRuby({ 0, 0 }, U'韩', u"宇宙"_red);
+        this->Doc().InsertRuby({ 0, 0 }, U'韩', u"宇宙无敌"_red);
         this->Doc().InsertText({ 0, 0 }, u"字没准儿是"_red);
         //this->Doc().SetFontName({ 0, 1 }, { 0, 4 }, 2);
-        this->Doc().SetFontSize({ 0, 3 }, { 0, 4 }, DEF_FONT_SIZE/2);
+        this->Doc().SetFontSize({ 0, 3 }, { 0, 4 }, DEF_FONT_SIZE*3/5);
         //this->Doc().InsertText({ 0, 0 }, u"😂😂😂😂😂"_red);
         this->Doc().InsertRuby({ 0, 0 }, U'汉', u"hàn"_red);
         this->Doc().InsertText({ 0, 0 }, u"Hello, World!\r\n泥壕世界!\n"_red);
@@ -669,10 +680,15 @@ void WinDWnD2D::RecreateContext(CEDTextCell& cell) noexcept {
     // 测量CELL
     if (cell.RefMetaInfo().dirty) {
         const auto layout = reinterpret_cast<IDWriteTextLayout*>(cell.ctx.context);
+        const bool ver = this->Doc().RefMatrix().read_direction & 1;
         DWRITE_TEXT_METRICS dwtm;
         DWRITE_LINE_METRICS dwlm;
         DWRITE_OVERHANG_METRICS dwom;
         if (SUCCEEDED(hr)) {
+            if (ver) {
+                layout->SetReadingDirection(DWRITE_READING_DIRECTION_TOP_TO_BOTTOM);
+                layout->SetFlowDirection(DWRITE_FLOW_DIRECTION_RIGHT_TO_LEFT);
+            }
             hr = layout->GetMetrics(&dwtm);
         }
         if (SUCCEEDED(hr)) {
@@ -683,17 +699,25 @@ void WinDWnD2D::RecreateContext(CEDTextCell& cell) noexcept {
             hr = layout->GetLineMetrics(&dwlm, 1, &count);
         }
         if (SUCCEEDED(hr)) {
-            cell.metrics.width = dwtm.widthIncludingTrailingWhitespace;
-            this->Doc().VAlignHelperH(dwlm.baseline, dwlm.height, cell.metrics);
-            cell.metrics.bounding.left = -dwom.left;
-            cell.metrics.bounding.top = -dwom.top;
-            cell.metrics.bounding.right = dwom.right;
-            cell.metrics.bounding.bottom = dwom.bottom;
+            // 垂直
+            if (ver) {
+                cell.metrics.width = dwtm.height;
+                this->Doc().VAlignHelperH(dwlm.baseline, dwlm.height, cell.metrics);
+                cell.metrics.bounding.left = -dwom.top;
+                cell.metrics.bounding.top = -dwom.right;
+                cell.metrics.bounding.right = dwom.bottom;
+                cell.metrics.bounding.bottom = dwom.left;
+            }
+            // 水平
+            else {
+                cell.metrics.width = dwtm.widthIncludingTrailingWhitespace;
+                this->Doc().VAlignHelperH(dwlm.baseline, dwlm.height, cell.metrics);
+                cell.metrics.bounding.left = -dwom.left;
+                cell.metrics.bounding.top = -dwom.top;
+                cell.metrics.bounding.right = dwom.right;
+                cell.metrics.bounding.bottom = dwom.bottom;
+            }
 
-            //cell.metrics.bounding.left = 0;
-            //cell.metrics.bounding.top = 0;
-            //cell.metrics.bounding.right = dwtm.width;
-            //cell.metrics.bounding.bottom = dwlm.height;
         }
         // CLEAN!
         cell.AsClean();
@@ -725,7 +749,9 @@ void WinDWnD2D::RecreateContextImage(CEDTextCell & cell) noexcept {
             width = s.width;
             height = s.height;
         }
-        this->Doc().VAlignHelperH(height*0.88f, height, cell.metrics);
+        const bool ver = this->Doc().RefMatrix().read_direction & 1;
+        const float ratio = ver ? 0.5f : 0.9f;
+        this->Doc().VAlignHelperH(height*ratio, height, cell.metrics);
         cell.metrics.width = width;
         cell.metrics.bounding.left = 0;
         cell.metrics.bounding.top = 0;
@@ -745,7 +771,6 @@ void WinDWnD2D::DeleteContext(CEDTextCell& cell) noexcept {
     auto& ptr = reinterpret_cast<IUnknown*&>(cell.ctx.context);
     ::SafeRelease(ptr);
 }
-
 
 /// <summary>
 /// Draws the context.
@@ -778,8 +803,10 @@ void WinDWnD2D::DrawContext(CEDTextCell& cell, unit_t baseline) noexcept {
         cell_rect.top = point.y + cell.metrics.bounding.top;
         cell_rect.right = point.x + cell.metrics.bounding.right;
         cell_rect.bottom = point.y + cell.metrics.bounding.bottom;
+        this->Map(&cell_rect.left, &cell_rect.right);
         renderer->FillRectangle(&cell_rect, dcb);
 #endif
+        this->Map(&point.x);
         renderer->DrawTextLayout(point, ptr, brush);
     }
     // 下划线
@@ -788,6 +815,7 @@ void WinDWnD2D::DrawContext(CEDTextCell& cell, unit_t baseline) noexcept {
         const auto renderer = this->data.d2d_rendertarget;
         auto point2 = point; point2.x += cell.metrics.width;
         const auto brush = this->data.d2d_brush;
+        this->Map(&point.x, &point2.x);
         renderer->DrawLine(point, point2, brush);
     }
 }
@@ -807,6 +835,7 @@ void WinDWnD2D::DrawContextImage(CEDTextCell & cell, unit_t baseline) noexcept {
         rect.right = cell.metrics.width + rect.left;
         rect.bottom = cell.metrics.ar_height + cell.metrics.dr_height + rect.top;
         const auto renderer = this->data.d2d_rendertarget;
+        this->Map(&rect.left, &rect.right);
         renderer->DrawBitmap(ptr, &rect);
     }
 }
@@ -844,7 +873,7 @@ void WinDWnD2D::ValueChanged(Changed changed) noexcept {
 /// <param name="">The .</param>
 /// <param name="offset">The offset.</param>
 /// <returns></returns>
-auto WinDWnD2D::HitTestImage(CEDTextCell & cell, unit_t offset) noexcept -> CellHitTest {
+auto WinDWnD2D::HitTestObject(CEDTextCell & cell, unit_t offset) noexcept -> CellHitTest {
     CellHitTest rv = { 0, 0, 1 };
     if (offset >= cell.metrics.width * 0.5)
         rv.pos = 1;
@@ -858,16 +887,17 @@ auto WinDWnD2D::HitTestImage(CEDTextCell & cell, unit_t offset) noexcept -> Cell
 /// <param name="offset">The offset.</param>
 /// <returns></returns>
 auto WinDWnD2D::HitTest(CEDTextCell& cell, unit_t offset) noexcept->CellHitTest {
-    if (cell.RefMetaInfo().metatype == Type_Image)
-        return HitTestImage(cell, offset);
+    if (cell.RefMetaInfo().metatype >= Type_InlineObject)
+        return HitTestObject(cell, offset);
     CellHitTest rv = { 0 };
     // 睡眠状态则唤醒
     if (!cell.ctx.context) this->RecreateContext(cell);
     // 失败则不获取
     if (const auto ptr = static_cast<IDWriteTextLayout*>(cell.ctx.context)) {
+        //offset -= cell.metrics.offset.x;
         BOOL hint = false, inside = false;
         DWRITE_HIT_TEST_METRICS htm;
-        ptr->HitTestPoint(offset, 0, &hint, &inside, &htm);
+        ptr->HitTestPoint(offset, offset, &hint, &inside, &htm);
         rv.pos = htm.textPosition;
         rv.trailing = hint;
         rv.length = htm.length;
@@ -977,6 +1007,8 @@ void WinDWnD2D::DrawSelection() noexcept {
         rc.top = rect.top;
         rc.right = rect.right;
         rc.bottom = rect.bottom;
+        
+        this->Map(&rc.left, &rc.right);
         renderer->FillRectangle(rc, brush);
     }
 }
@@ -1010,6 +1042,9 @@ void WinDWnD2D::Render() noexcept {
             caret.x + custom_width * 0.5f,      // 向后后偏移一半
             caret.y + caret.height - 1          // 上下保留一个单位的空白以保持美观
         };
+
+        this->Map(&rect.left, &rect.right);
+
         renderer->FillRectangle(rect, this->data.d2d_black);
     }
     const auto hr = renderer->EndDraw();

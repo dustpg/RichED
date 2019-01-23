@@ -7,7 +7,6 @@
 #include <algorithm>
 
 enum { RED_INIT_ARRAY_BUFLEN = 32 };
-enum { RED_DIRTY_ARRAY_SIZE = 256 };
 
 // CJK LUT
 RED_LUT_ALIGNED const uint32_t RED_CJK_LUT[] = {
@@ -953,8 +952,8 @@ void RichED::CEDTextDocument::EndOp() noexcept {
 bool RichED::CEDTextDocument::Private::Mouse(
     CEDTextDocument & doc, Point pt, bool hold) noexcept{
     HitTestCtx ctx;
-    // TODO: 屏幕坐标空间映射到文档坐标空间
-
+    // 屏幕坐标空间映射到文档坐标空间
+    pt = doc.m_matrix.ScreenToDoc(pt);
     // 针对鼠标位置的命中测试
     if (Private::HitTest(doc, pt, ctx)) {
         const DocPoint dp {
@@ -1806,18 +1805,12 @@ bool RichED::CEDTextDocument::Private::Insert(
     bool behind) noexcept {
     // 需要重绘
     RichED::NeedRedraw(doc);
-    // 最小化脏数组重建用数据
-    //VisualLine vlbuffer[RED_DIRTY_ARRAY_SIZE];
-    //uint32_t vlbuffer_length = 0;
     // 断言检测
     assert(GetLineTextLength(linedata.first) == linedata.length);
     assert(dp.pos <= linedata.length);
     assert(dp.line < doc.m_vLogic.GetSize());
     // TODO: 强异常保证
     // TODO: [优化] 最小化脏数组重建
-    // TODO: [优化] 仅插入换行符
-
-
 
     // 第二次遍历, 最小化m_vLogic重建
     auto pos = dp.pos;
@@ -2898,11 +2891,55 @@ void RichED::CEDTextDocument::Private::ValueChanged(
 // ----------------------------------------------------------------------------
 
 namespace RichED {
+    // Matrix3X2F
+    struct Matrix3X2F { unit_t _11, _12, _21, _22, _31, _32; };
+    /// <summary>
+    /// Transforms the point.
+    /// </summary>
+    /// <param name="matrix">The matrix.</param>
+    /// <param name="point">The point.</param>
+    /// <returns></returns>
+    auto TransformPoint(const Matrix3X2F& matrix, Point point) noexcept {
+        return Point{
+            point.x * matrix._11 + point.y * matrix._21 + matrix._31,
+            point.x * matrix._12 + point.y * matrix._22 + matrix._32
+        };
+    }
+    /// <summary>
+    /// Documents to screen.
+    /// </summary>
+    /// <param name="point">The point.</param>
+    /// <returns></returns>
+    auto DocMatrix::DocToScreen(Point point) const noexcept->Point {
+        static_assert(sizeof(d2s_matrix) == sizeof(Matrix3X2F), "???");
+        auto& matrix = reinterpret_cast<const Matrix3X2F&>(d2s_matrix);
+        return RichED::TransformPoint(matrix, point);
+    }
+    /// <summary>
+    /// Screens to document.
+    /// </summary>
+    /// <param name="point">The point.</param>
+    /// <returns></returns>
+    auto DocMatrix::ScreenToDoc(Point point) const noexcept->Point {
+        static_assert(sizeof(s2d_matrix) == sizeof(Matrix3X2F), "???");
+        auto& matrix = reinterpret_cast<const Matrix3X2F&>(s2d_matrix);
+        return RichED::TransformPoint(matrix, point);
+    }
     // matrix init
     void InitMatrix(DocMatrix& matrix, Direction read, Direction flow) noexcept {
         matrix.read_direction = read;
         matrix.flow_direction = flow;
+        // 流向必须与阅读方向垂直
         assert(((read ^ flow) & 1) == 1);
+        auto& s2d_matrix = reinterpret_cast<Matrix3X2F&>(matrix.s2d_matrix);
+        auto& d2s_matrix = reinterpret_cast<Matrix3X2F&>(matrix.d2s_matrix);
+        constexpr auto one = unit_one(1);
+        s2d_matrix = { one, 0, 0, one, 0, 0 };
+        d2s_matrix = { one, 0, 0, one, 0, 0 };
+        //s2d_matrix = { 0, -one, one, 0,  0, one * 800 };
+        //d2s_matrix = { 0, one, -one, 0, one * 800, 0 };
+
+
         // 方向键映射逻辑方向
         matrix.left_mapper  = impl::mode_logicleft;
         matrix.up_mapper    = impl::mode_logicup;

@@ -110,10 +110,10 @@ namespace RichED {
         auto&RefLineFeed() const noexcept { return m_linefeed; }
         // get info
         auto&RefInfo() const noexcept { return m_info; }
+        // get matrix
+        auto&RefMatrix() const noexcept { return m_matrix; }
         // set new line feed
         void SetLineFeed(LineFeed) noexcept;
-        // set new wrap mode
-        //void SetWrapMode(WrapMode) noexcept;
         // get selection
         auto GetSelectionRange() const noexcept { return DocRange{ m_dpSelBegin, m_dpSelEnd }; }
     public: // Low level 

@@ -136,7 +136,7 @@ void RichED::CEDTextCell::SetRichED(const RichData& data) noexcept {
 /// <returns></returns>
 auto RichED::CEDTextCell::Split(uint32_t pos) noexcept -> CEDTextCell * {
     assert(pos <= m_string.length);
-    if (pos >= m_string.length)  return static_cast<CEDTextCell*>(next);
+    if (pos >= m_string.length) return static_cast<CEDTextCell*>(next);
     return this->SplitEx(pos);
 }
 
