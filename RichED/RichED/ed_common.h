@@ -197,8 +197,8 @@ namespace RichED {
         uint16_t            capacity;
         // string data, [1] as inline object extra-info length
         char16_t            data[2];
-        // get left
-        uint16_t Left() const noexcept { return capacity - length; }
+        // get left, maybe == -1
+        int32_t Left() const noexcept { return capacity - length; }
     };
     // fixed string part 2
     struct FixedStringB {

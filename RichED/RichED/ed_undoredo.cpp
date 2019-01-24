@@ -160,7 +160,7 @@ void RichED::CEDUndoRedo::AddOp(CEDTextDocument& doc, TrivialUndoRedo& op) noexc
 }
 
 // ----------------------------------------------------------------------------
-//                               Object Char Insert
+//                               Object 
 // ----------------------------------------------------------------------------
 
 namespace RichED {
@@ -185,7 +185,7 @@ namespace RichED {
         }
     };
     // Rollback objs
-    void RollbackObjs(CEDTextDocument& doc, TrivialUndoRedo& op) noexcept {
+    void RemoveObjs(CEDTextDocument& doc, TrivialUndoRedo& op) noexcept {
         auto obj = reinterpret_cast<ObjectSingeOp*>(&op + 1);
         const auto end_ptr = reinterpret_cast<char*>(&op.bytes_from_here) + op.bytes_from_here;
         const auto end_itr = reinterpret_cast<ObjectSingeOp*>(end_ptr);
@@ -217,6 +217,60 @@ namespace RichED {
             }
             obj = obj->Next();
         }
+    }
+    /// <summary>
+    /// 插入
+    /// </summary>
+    /// <param name="doc">The document.</param>
+    /// <param name="op">The op.</param>
+    /// <returns></returns>
+    void InsertObjs(CEDTextDocument& doc, TrivialUndoRedo& op) noexcept {
+        // 只有一个
+        auto obj = reinterpret_cast<ObjectSingeOp*>(&op + 1);
+        const auto end_ptr = reinterpret_cast<char*>(&op.bytes_from_here) + op.bytes_from_here;
+        const auto end_itr = reinterpret_cast<ObjectSingeOp*>(end_ptr);
+        assert(obj->Next() == end_itr);
+        const auto info = reinterpret_cast<InlineInfo*>(obj + 1);
+        doc.InsertInline(obj->begin, *info, obj->extra_length, obj->cell_type);
+    }
+}
+
+
+// ----------------------------------------------------------------------------
+//                             RichED Ruby
+// ----------------------------------------------------------------------------
+
+namespace RichED {
+    // singe op for rich
+    struct RubySingeOp {
+        // under riched
+        RichData        riched;
+        // begin point
+        DocPoint        begin;
+        // ruby length
+        uint32_t        ruby_length;
+        // under length
+        uint32_t        under_length;
+        // char
+        char32_t        ch;
+        // ruby
+        char16_t        ruby[2];
+    };
+    // Rollback ruby
+    void RemoveRuby(CEDTextDocument& doc, TrivialUndoRedo& op) noexcept {
+        const auto obj = reinterpret_cast<RubySingeOp*>(&op + 1);
+        DocPoint end_dp = obj->begin;
+        end_dp.pos += obj->ruby_length + obj->under_length;
+        doc.RemoveText(obj->begin, end_dp);
+    }
+    // exec ruby
+    void ExecuteRuby(CEDTextDocument& doc, TrivialUndoRedo& op) noexcept {
+        const auto obj = reinterpret_cast<RubySingeOp*>(&op + 1);
+        U16View ruby;
+        ruby.first = obj->ruby;
+        ruby.second = ruby.first + obj->ruby_length;
+        assert(ruby.second > ruby.first);
+        doc.InsertRuby(obj->begin, obj->ch, ruby, &obj->riched);
     }
 }
 
@@ -302,7 +356,11 @@ namespace RichED {
         Op_RemoveObjs,
 
         // insert: text
-        Op_InsertText
+        Op_InsertText,
+        // insert: objs
+        Op_InsertObjs,
+        // insert: ruby
+        Op_InsertRuby,
     };
     namespace impl {
         /// <summary>
@@ -444,7 +502,46 @@ namespace RichED {
 #endif 
         }
     }
-
+    namespace impl {
+        // ruby undoredo
+        void*ruby_undoredo(uint32_t length) noexcept {
+            assert(length);
+            const size_t len = sizeof(TrivialUndoRedo)
+                + sizeof(RubySingeOp)
+                + sizeof(char16_t) * length
+                ;
+            const auto ptr = std::malloc(len);
+            if (ptr) {
+                const auto op = reinterpret_cast<TrivialUndoRedo*>(ptr);
+                const size_t offset = offsetof(TrivialUndoRedo, bytes_from_here);
+                op->bytes_from_here = len - offset;
+            }
+            return ptr;
+        }
+        // insert ruby
+        void ruby_as_insert(void* ptr, uint16_t id) noexcept {
+            assert(ptr && id);
+            const auto op = reinterpret_cast<TrivialUndoRedo*>(ptr);
+            op->type = Op_InsertRuby;
+            op->decorator = id - 1;
+        }
+        // ruby set data
+        void ruby_set_data(void* ptr, DocPoint dp, char32_t ch, U16View view, const RichData& data) noexcept {
+            const auto op = reinterpret_cast<TrivialUndoRedo*>(ptr);
+            const auto obj = reinterpret_cast<RubySingeOp*>(op + 1);
+            obj->riched = data;
+            obj->begin = dp;
+            obj->ruby_length = view.second - view.first;
+            obj->under_length = ch > 0xffff ? 2 : 1;
+            obj->ch = ch;
+            const size_t bl = sizeof(view.first[0]) * (view.second - view.first);
+            std::memcpy(obj->ruby, view.first, bl);
+#ifndef NDEBUG
+            // 调试时添加NUL字符方便调试
+            obj->ruby[obj->ruby_length] = 0;
+#endif 
+        }
+    }
     namespace impl {
         /// <summary>
         /// Objses the undoredo.
@@ -477,6 +574,19 @@ namespace RichED {
             assert(ptr && id);
             const auto op = reinterpret_cast<TrivialUndoRedo*>(ptr);
             op->type = Op_RemoveObjs;
+            op->decorator = id - 1;
+            return op + 1;
+        }
+        /// <summary>
+        /// Objses as remove.
+        /// </summary>
+        /// <param name="ptr">The PTR.</param>
+        /// <param name="id">The identifier.</param>
+        /// <returns></returns>
+        void*objs_as_insert(void* ptr, uint16_t id) noexcept {
+            assert(ptr && id);
+            const auto op = reinterpret_cast<TrivialUndoRedo*>(ptr);
+            op->type = Op_InsertObjs;
             op->decorator = id - 1;
             return op + 1;
         }
@@ -532,11 +642,25 @@ namespace RichED {
             op.redo = RichED::UndoRedoIdle;
             break;
         case Op_InsertText:
-            // 删除文本
+            // 插入文本
             // - 撤销: 文本移除
             // - 重做: 文本添加
             op.undo = RichED::RollbackText;
             op.redo = RichED::ExecuteText;
+            break;
+        case Op_InsertObjs:
+            // 插入对象
+            // - 撤销: 删除
+            // - 重做: 插入
+            op.undo = RichED::RemoveObjs;
+            op.redo = RichED::InsertObjs;
+            break;
+        case Op_InsertRuby:
+            // 插入注音
+            // - 撤销: 删除注音
+            // - 重做: 插入注音
+            op.undo = RichED::RemoveRuby;
+            op.redo = RichED::ExecuteRuby;
             break;
         }
     }

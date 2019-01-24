@@ -37,6 +37,20 @@ auto LoadBitmapFromFile(
 
 struct RED_RICHED_ALIGNED DWnD2DImageExtraInfo {
     wchar_t             uri[4096];
+
+    auto as_info() noexcept { return reinterpret_cast<InlineInfo*>(this); }
+
+    auto create_img(const wchar_t p[]) noexcept {
+        const auto l = std::wcslen(p);
+        int16_t bytelen16 = 0;
+        if (l * sizeof(wchar_t) < sizeof(uri)) {
+            const size_t bytelen = sizeof(wchar_t) * (l + 1);
+            std::memcpy(this->uri, p, bytelen);
+            assert(bytelen < 30000);
+            bytelen16 = static_cast<int16_t>(bytelen);
+        }
+        return bytelen16;
+    };
 };
 
 struct DWnD2DDataField {
@@ -250,31 +264,19 @@ bool WinDWnD2D::Init(HWND hwnd) noexcept {
     }
     // 初文字
     if (SUCCEEDED(hr)) {
-        const auto create_img = [this](const wchar_t uri[]) noexcept {
-            CEDTextCell* cell = nullptr;
-            DWnD2DImageExtraInfo info;
-            const auto l = std::wcslen(uri);
-            if (l * sizeof(wchar_t) < sizeof(info.uri)) {
-                const size_t bytelen = sizeof(wchar_t) * (l + 1);
-                std::memcpy(info.uri, uri, bytelen);
-                const auto ptr = reinterpret_cast<InlineInfo*>(&info);
-                assert(bytelen < 30000);
-                const int16_t bytelen16 = static_cast<int16_t>(bytelen);
-                cell = this->Doc().CreateInlineObject(*ptr, bytelen16, Type_Image);
-            }
-            return cell;
-        };
-
-
-        this->Doc().InsertInline({ 0, 0 }, create_img(L"../common/2.png"));
+        DWnD2DImageExtraInfo info;
+#if 0
+        this->Doc().InsertText({ 0, 0 }, u"😂😂😂😂😂"_red);
+#else
+        this->Doc().InsertInline({ 0, 0 }, *info.as_info(), info.create_img(L"../common/2.png"), Type_Image);
         this->Doc().InsertText({ 0, 0 }, u"国人发明的"_red);
-        this->Doc().InsertRuby({ 0, 0 }, U'韩', u"宇宙无敌"_red);
+        this->Doc().InsertRuby({ 0, 0 }, U'韩', u"宇宙"_red);
         this->Doc().InsertText({ 0, 0 }, u"字没准儿是"_red);
         //this->Doc().SetFontName({ 0, 1 }, { 0, 4 }, 2);
         this->Doc().SetFontSize({ 0, 3 }, { 0, 4 }, DEF_FONT_SIZE*3/5);
-        //this->Doc().InsertText({ 0, 0 }, u"😂😂😂😂😂"_red);
         this->Doc().InsertRuby({ 0, 0 }, U'汉', u"hàn"_red);
         this->Doc().InsertText({ 0, 0 }, u"Hello, World!\r\n泥壕世界!\n"_red);
+#endif
     }
     // 创建 WIC 工厂.
     if (SUCCEEDED(hr)) {
@@ -392,6 +394,7 @@ LRESULT WinDWnD2D::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
         ::MessageBoxW(hwnd, str.c_str(), L"<GenText>", MB_OK);
     };
 
+
     bool handled = false;
     LRESULT result = 0;
     switch (message)
@@ -400,6 +403,7 @@ LRESULT WinDWnD2D::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
         int16_t x, y;
         PAINTSTRUCT ps;
         DocRange dr;
+        DWnD2DImageExtraInfo info;
     case WM_SIZE:
         g_platform.Resize(LOWORD(lParam), HIWORD(lParam));
         handled = true;
@@ -563,7 +567,7 @@ LRESULT WinDWnD2D::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
     //        handled = false;
     //        break;
         case VK_F1:
-            g_platform.Doc().SetFontSize({ 0, 7 }, { 0, 8 }, 20.f);
+            g_platform.Doc().GuiFontSize(20.f);
             break;
         case VK_F2:
             g_platform.Doc().SetFontColor({ 0, 7 }, { 0, 8 }, 0xff0000);
@@ -585,6 +589,12 @@ LRESULT WinDWnD2D::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
                 //ctrl_h -= 10.f;
                 g_platform.Doc().Resize({ ctrl_w, ctrl_h });
             }
+            break;
+        case VK_F7:
+            gui_op = g_platform.Doc().GuiInline(*info.as_info(), info.create_img(L"../common/2.png"), Type_Image);
+            break;
+        case VK_F8:
+            gui_op = g_platform.Doc().GuiRuby(U'漢', u"かん"_red);
             break;
         case VK_F9:
             dr = g_platform.Doc().GetSelectionRange();

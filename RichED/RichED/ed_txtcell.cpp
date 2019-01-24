@@ -41,7 +41,7 @@ namespace RichED { namespace detail {
     void insert(FixedStringA& obj, uint32_t pos, const char16_t* str, uint32_t len) noexcept {
         // TODO: utf-16 双字断言
         assert(obj.capacity == TEXT_CELL_STR_MAXLEN);
-        assert(len <= obj.capacity && "out of range");
+        assert(len <= uint32_t(obj.capacity + 1) && "out of range");
         assert(obj.length + len <= TEXT_CELL_STR_MAXLEN + 1 && "out of range");
         assert(pos <= obj.length);
         const size_t moved = (obj.length - pos) * sizeof(obj.data[0]);

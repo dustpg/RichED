@@ -35,9 +35,9 @@ namespace RichED {
     class CEDTextDocument;
     // Trivial UndoRedo data, no CTOR/DTOR
     struct TrivialUndoRedo : Node {
-        // undo
+        // undo-op fucntion pointer
         void(*undo)(CEDTextDocument&, TrivialUndoRedo&) noexcept;
-        // redo
+        // redo-op fucntion pointer
         void(*redo)(CEDTextDocument&, TrivialUndoRedo&) noexcept;
         // byte length from here
         RED_RICHED_ALIGNED uint32_t bytes_from_here;

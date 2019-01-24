@@ -85,12 +85,12 @@ namespace RichED { namespace detail {
         return rv;
     }
     // nice view 1
-    static U16View nice_view1(U16View& view, uint32_t len) noexcept {
+    static U16View nice_view1(U16View& view, int32_t len) noexcept {
         U16View rv;
         auto itr = rv.first = view.first; 
-        const uint32_t real_len = std::min(len, uint32_t(view.second - view.first));
+        const int32_t real_len = std::min(len, int32_t(view.second - view.first));
 
-        for (uint32_t i = 0; i != real_len; ++i) {
+        for (int32_t i = 0; i < real_len; ++i) {
             if (*itr == '\n') {
                 if (i && itr[-1] == '\r') --itr;
                 break;
@@ -102,11 +102,11 @@ namespace RichED { namespace detail {
         return rv;
     }
     // nice view 2
-    static U16View nice_view2(U16View& view, uint32_t len) noexcept {
+    static U16View nice_view2(U16View& view, int32_t len) noexcept {
         U16View rv; 
         auto itr = rv.second = view.second;
-        const uint32_t real_len = std::min(len, uint32_t(view.second - view.first));
-        for (uint32_t i = 0; i != real_len; ++i) {
+        const int32_t real_len = std::min(len, int32_t(view.second - view.first));
+        for (int32_t i = 0; i < real_len; ++i) {
             if (itr[-1] == '\n') break;
             --itr;
         }
@@ -293,8 +293,18 @@ namespace RichED { namespace impl {
     void*objs_undoredo(uint32_t count, uint32_t length) noexcept;
     // remove objs
     void*objs_as_remove(void* ptr, uint16_t id) noexcept;
+    // insert objs
+    void*objs_as_insert(void* ptr, uint16_t id) noexcept;
     // objs go on
     void*objs_as_goon(void* ptr, DocPoint dp, uint32_t ruby, CellType type, uint16_t exlen, void* data) noexcept;
+
+
+    // ruby undoredo
+    void*ruby_undoredo(uint32_t length) noexcept;
+    // insert ruby
+    void ruby_as_insert(void* ptr, uint16_t id) noexcept;
+    // ruby set data
+    void ruby_set_data(void* ptr, DocPoint, char32_t, U16View, const RichData&) noexcept;
 }}
 
 
@@ -367,6 +377,10 @@ namespace RichED {
         static void RecordRich(CEDTextDocument& doc, DocPoint begin, const CheckRangeCtx&)noexcept;
         // record text
         static void RecordText(CEDTextDocument& doc, DocPoint begin, DocPoint end)noexcept;
+        // record obj for ins
+        static void RecrodObjsEx(CEDTextDocument& doc, DocPoint begin, CEDTextCell& cell) noexcept;
+        // record ruby for ins
+        static void RecordRubyEx(CEDTextDocument& doc, DocPoint begin, const RichData&, char32_t, U16View)noexcept;
         // record text for ins
         static void RecordTextEx(CEDTextDocument& doc, DocPoint begin, DocPoint end, U16View)noexcept;
         // mark dirty
@@ -383,6 +397,10 @@ namespace RichED {
         static auto WordRight(CEDTextDocument& doc, DocPoint) noexcept->DocPoint;
         // value changed
         static void ValueChanged(CEDTextDocument& doc, uint32_t id) noexcept;
+        // on alloc undo-op failed
+        static void AllocUndoFailed(CEDTextDocument& doc) noexcept;
+        // create inline object
+        static auto CreateInline(CEDTextDocument&, const InlineInfo &, int16_t , CellType ) noexcept->CEDTextCell*;
     };
     // RichData ==
     inline bool operator==(const RichData& a, const RichData& b) noexcept {
@@ -615,8 +633,13 @@ bool RichED::CEDTextDocument::InsertRuby(DocPoint dp, char32_t ch, U16View view,
         if (real_view.first == real_view.second) return assert(!"empty"), false;
         auto& line_data = m_vLogic[dp.line];
         dp.pos = std::min(dp.pos, line_data.length);
-        // 创建一个简单的
         auto riched = rich_ptr ? *rich_ptr : default_riched; 
+        // 处理存在撤销栈的情况
+        if (Private::IsRecord(*this)) {
+            // 记录文本
+            Private::RecordRubyEx(*this, dp, riched, ch, real_view);
+        }
+        // 创建一个简单的
         riched.size = half(riched.size);
         const auto cell = RichED::CreateShrinkedCell(*this, riched);;
         if (!cell) return false;
@@ -624,7 +647,7 @@ bool RichED::CEDTextDocument::InsertRuby(DocPoint dp, char32_t ch, U16View view,
         auto& str = const_cast<FixedStringA&>(cell->RefString());
         str.capacity = str.length = detail::utf32to16(ch, str.data);
         // 插入内联对象
-        if (!this->InsertInline(dp, std::move(*cell))) return false;
+        if (!Private::Insert(*this, dp, *cell, line_data)) return false;
         // 插入普通数据
         dp.pos += cell->RefString().length;
         const auto rv = Private::Insert(*this, dp, real_view, line_data, false);
@@ -720,7 +743,7 @@ void RichED::CEDTextDocument::RankUpMagic(
             // 分离对象
             if (!cell->Split(pos + 1)) return;
             // 创建对象
-            const auto obj = this->CreateInlineObject(info, len, type);
+            const auto obj = Private::CreateInline(*this, info, len, type);
             if (!obj) return;
             // EOL信息
             cell->MoveEOL(*obj);
@@ -741,10 +764,11 @@ void RichED::CEDTextDocument::RankUpMagic(
 /// <param name="len">The length.</param>
 /// <param name="type">The type.</param>
 /// <returns></returns>
-auto RichED::CEDTextDocument::CreateInlineObject(
+auto RichED::CEDTextDocument::Private::CreateInline(
+    CEDTextDocument& doc,
     const InlineInfo &info, int16_t len, CellType type) noexcept -> CEDTextCell * {
     assert(len >= 0);
-    const auto ptr = RichED::CreatePublicCell(*this, default_riched, len, 1);
+    const auto ptr = RichED::CreatePublicCell(doc, doc.default_riched, len, 1);
     if (ptr) {
         const_cast<CellType&>(ptr->RefMetaInfo().metatype) = type;
         std::memcpy(ptr->GetExtraInfo(), &info, len);
@@ -763,17 +787,26 @@ auto RichED::CEDTextDocument::CreateInlineObject(
 /// <param name="dp">The dp.</param>
 /// <param name="cell">The cell.</param>
 /// <returns></returns>
-bool RichED::CEDTextDocument::InsertInline(DocPoint dp, CEDTextCell&& cell) noexcept {
-    const auto rv = [this, dp, &cell]() mutable noexcept {
+bool RichED::CEDTextDocument::InsertInline(DocPoint dp, 
+    const InlineInfo &info, int16_t len, CellType type) noexcept {
+    const auto cell = Private::CreateInline(*this, info, len, type);
+    if (!cell) return false;
+    // 正式处理
+    const auto rv = [this, dp, cell]() mutable noexcept {
         if (dp.line < m_vLogic.GetSize()) {
             auto& line_data = m_vLogic[dp.line];
             dp.pos = std::min(dp.pos, line_data.length);
-            return Private::Insert(*this, dp, cell, line_data);
+            // 处理存在撤销栈的情况
+            if (Private::IsRecord(*this)) {
+                // 记录对象
+                Private::RecrodObjsEx(*this, dp, *cell);
+            }
+            return Private::Insert(*this, dp, *cell, line_data);
         }
         return false;
     }();
     // 失败则释放对象
-    if (!rv) cell.Dispose();
+    if (!rv) cell->Dispose();
     return rv;
 }
 
@@ -924,7 +957,8 @@ void RichED::CEDTextDocument::VAlignHelperH(unit_t ar, unit_t height, CellMetric
 /// </summary>
 /// <returns></returns>
 void RichED::CEDTextDocument::BeginOp() noexcept {
-    m_uUndoOp = 1;
+    assert(m_uUndoOp == 0);
+    m_uUndoOp = m_uUndoIsOk;
 }
 
 
@@ -933,6 +967,7 @@ void RichED::CEDTextDocument::BeginOp() noexcept {
 /// </summary>
 /// <returns></returns>
 void RichED::CEDTextDocument::EndOp() noexcept {
+    assert(m_uUndoOp >= m_uUndoIsOk);
     m_uUndoOp = 0;
     // 检查撤销栈长度
 }
@@ -1117,6 +1152,58 @@ bool RichED::CEDTextDocument::GuiReturn() noexcept {
     }
     return false;
 }
+
+/// <summary>
+/// GUIs the ruby.
+/// </summary>
+/// <param name="ch">The ch.</param>
+/// <param name="ruby">The ruby.</param>
+/// <param name="riched">The riched.</param>
+/// <returns></returns>
+bool RichED::CEDTextDocument::GuiRuby(char32_t ch, U16View ruby, const RichData* riched) noexcept {
+    // 无效
+    if (ruby.first == ruby.second) return false;
+    // 只读
+    if (m_info.flags & Flag_GuiReadOnly) return false;
+    // 开始记录
+    detail::op_recorder recorder{ *this };
+    // 删除选择区
+    Private::DeleteSelection(*this);
+    // 插入对象
+    const auto rv = this->InsertRuby(m_dpCaret, ch, ruby, riched);
+    // 逻辑右移
+    Private::SetSelection(*this, nullptr, m_dpCaret, impl::mode_logicright, false);
+    Private::UpdateSelection(*this, m_dpCaret, m_dpAnchor);
+    return rv;
+}
+
+/// <summary>
+/// GUIs the inline.
+/// </summary>
+/// <param name="info">The information.</param>
+/// <param name="len">The length.</param>
+/// <param name="type">The type.</param>
+/// <returns></returns>
+bool RichED::CEDTextDocument::GuiInline(const InlineInfo& info, int16_t len, CellType type) noexcept {
+    // 无效
+    if (len <= 0) return false;
+    // 只读
+    if (m_info.flags & Flag_GuiReadOnly) return false;
+    // 开始记录
+    detail::op_recorder recorder{ *this };
+    // 删除选择区
+    Private::DeleteSelection(*this);
+    // 插入对象
+    const auto rv = this->InsertInline(m_dpCaret, info, len, type);
+    // 有效
+    if (rv) {
+        // 逻辑右移
+        Private::SetSelection(*this, nullptr, m_dpCaret, impl::mode_logicright, false);
+        Private::UpdateSelection(*this, m_dpCaret, m_dpAnchor);
+    }
+    return rv;
+}
+
 
 /// <summary>
 /// GUIs the left.
@@ -1309,6 +1396,31 @@ bool RichED::CEDTextDocument::set_riched(
         }
         return true;
     }
+    return false;
+}
+
+
+/// <summary>
+/// GUIs the riched.
+/// </summary>
+/// <param name="offset">The offset.</param>
+/// <param name="size">The size.</param>
+/// <param name="data">The data.</param>
+/// <param name="relayout">if set to <c>true</c> [relayout].</param>
+/// <returns></returns>
+bool RichED::CEDTextDocument::gui_riched(size_t offset, size_t size, const void * data, bool relayout) noexcept {
+    assert(!"NOT IMPL");
+    return false;
+}
+
+/// <summary>
+/// GUIs the flags.
+/// </summary>
+/// <param name="flags">The flags.</param>
+/// <param name="set">The set.</param>
+/// <returns></returns>
+bool RichED::CEDTextDocument::gui_flags(uint16_t flags, uint32_t set) noexcept {
+    assert(!"NOT IMPL");
     return false;
 }
 
@@ -1580,7 +1692,7 @@ void RichED::CEDTextDocument::Private::Recreate(
         {
             auto node = detail::next_cell(&cell);
             const unit_t allw = std::max(width, cell.metrics.width);
-            const unit_t offy =  -(/*node->metrics.dr_height + */cell.metrics.ar_height);
+            const unit_t offy =  -(node->metrics.dr_height + cell.metrics.ar_height);
             const unit_t height = node->metrics.ar_height + node->metrics.dr_height;
             cell.metrics.offset.x = half(allw - cell.metrics.width);
             cell.metrics.offset.y = height;
@@ -1893,6 +2005,7 @@ bool RichED::CEDTextDocument::Private::Insert(
     // 优化: 足够塞进去的话
     auto line_ptr = &doc.m_vLogic[dp.line];
     if (!lf_count) {
+        // TODO: 插入双字UTF-16?
         const auto len = view.second - view.first;
         if (len <= cell->RefString().Left()) {
             cell->InsertText(pos, view);
@@ -2097,8 +2210,7 @@ void RichED::CEDTextDocument::Private::RecordObjs(
     if (!objs_count) return;
     // 申请数据
     const auto data = impl::objs_undoredo(objs_count, extra_len);
-    // TODO: OOM处理, 撤销出现OOM应该释放全部撤销信息
-    if (!data) return;
+    if (!data) return Private::AllocUndoFailed(doc);
     auto obj = impl::objs_as_remove(data, doc.m_uUndoOp++);
     // 第二次遍历, 生成OP数据
     for_it([obj](CEDTextCell* object, DocPoint point) mutable noexcept {
@@ -2192,8 +2304,7 @@ void RichED::CEDTextDocument::Private::RecordRich(
     }
     // 申请数据
     const auto data = impl::rich_undoredo(count);
-    // TODO: OOM处理, 撤销出现OOM应该释放全部撤销信息
-    if (!data) return;
+    if (!data) return Private::AllocUndoFailed(doc);
     // 删除富属
     impl::rich_as_remove(data, doc.m_uUndoOp++);
     // 换行
@@ -2253,8 +2364,7 @@ void RichED::CEDTextDocument::Private::RecordText(
     if (!length) return;
     // 申请数据
     const auto data = impl::text_undoredo(length);
-    // TODO: OOM处理, 撤销出现OOM应该释放全部撤销信息
-    if (!data) return;
+    if (!data) return Private::AllocUndoFailed(doc);
     // 删除文本
     impl::text_as_remove(data, doc.m_uUndoOp++, begin, end);
     uint32_t index = 0;
@@ -2268,6 +2378,60 @@ void RichED::CEDTextDocument::Private::RecordText(
     };
     Private::GenText(doc, begin, end, append, linefeed);
     // 添加
+    const auto op = reinterpret_cast<TrivialUndoRedo*>(data);
+    doc.m_undo.AddOp(doc, *op);
+}
+
+/// <summary>
+/// Allocs the undo failed.
+/// </summary>
+/// <param name="doc">The document.</param>
+/// <returns></returns>
+void RichED::CEDTextDocument::Private::AllocUndoFailed(CEDTextDocument & doc) noexcept {
+    // TODO: OOM处理, 撤销出现OOM应该释放全部撤销信息
+}
+
+/// <summary>
+/// Records the ruby ex.
+/// </summary>
+/// <param name="doc">The document.</param>
+/// <param name="begin">The begin.</param>
+/// <param name="riched">The riched.</param>
+/// <param name="ch">The ch.</param>
+/// <param name="view">The view.</param>
+/// <returns></returns>
+void RichED::CEDTextDocument::Private::RecordRubyEx(
+    CEDTextDocument & doc, DocPoint begin, const RichData & riched, char32_t ch, U16View view) noexcept {
+    // 申请数据
+    const auto data = impl::ruby_undoredo(view.second - view.first);
+    if (!data) return Private::AllocUndoFailed(doc);
+    impl::ruby_as_insert(data, doc.m_uUndoOp++);
+    impl::ruby_set_data(data, begin, ch, view, riched);
+    const auto op = reinterpret_cast<TrivialUndoRedo*>(data);
+    doc.m_undo.AddOp(doc, *op);
+}
+
+/// <summary>
+/// Recrods the objs ex.
+/// </summary>
+/// <param name="doc">The document.</param>
+/// <param name="begin">The begin.</param>
+/// <param name="cell">The cell.</param>
+/// <returns></returns>
+void RichED::CEDTextDocument::Private::RecrodObjsEx(
+    CEDTextDocument & doc, DocPoint begin, CEDTextCell & cell) noexcept {
+    // 内联对象
+    assert(cell.RefMetaInfo().metatype > Type_UnderRuby);
+    constexpr uint32_t aligned_size = alignof(TrivialUndoRedo);
+    constexpr uint32_t aligned_mask = ~(aligned_size - 1);
+    const uint16_t extra_o = cell.RefString().data[1];
+    const uint32_t extra = extra_o;
+    const uint32_t extra_aligned = (extra + (aligned_size - 1)) & aligned_mask;
+    // 申请数据
+    const auto data = impl::objs_undoredo(1, extra_aligned);
+    if (!data) return Private::AllocUndoFailed(doc);
+    const auto obj = impl::objs_as_insert(data, doc.m_uUndoOp++);
+    impl::objs_as_goon(obj, begin, 0, cell.RefMetaInfo().metatype, extra_o, cell.GetExtraInfo());
     const auto op = reinterpret_cast<TrivialUndoRedo*>(data);
     doc.m_undo.AddOp(doc, *op);
 }
@@ -2288,8 +2452,7 @@ void RichED::CEDTextDocument::Private::RecordTextEx(
     assert(length);
     // 申请数据
     const auto data = impl::text_undoredo(length);
-    // TODO: OOM处理, 撤销出现OOM应该释放全部撤销信息
-    if (!data) return;
+    if (!data) return Private::AllocUndoFailed(doc);
     impl::text_as_insert(data, doc.m_uUndoOp++, begin, end);
     impl::text_append(data, 0, view);
     // 添加

@@ -77,6 +77,13 @@ namespace RichED {
             DocPoint begin, DocPoint end,
             uint16_t flags,  uint32_t set
         ) noexcept;
+        // gui: set riched
+        bool gui_riched(
+            size_t offset, size_t size,
+            const void* data, bool relayout
+        ) noexcept;
+        // set flags
+        bool gui_flags(uint16_t flags, uint32_t set) noexcept;
     public:
         // private impl
         struct Private;
@@ -121,12 +128,8 @@ namespace RichED {
         void BeginOp() noexcept;
         // end an operation for undo-stack
         void EndOp() noexcept;
-        // create inline object
-        auto CreateInlineObject(const InlineInfo&, int16_t len, CellType type) noexcept->CEDTextCell*;
         // insert inline object
-        bool InsertInline(DocPoint, CEDTextCell&&) noexcept;
-        // insert inline object
-        bool InsertInline(DocPoint dp, CEDTextCell* p) noexcept { return p ? InsertInline(dp, std::move(*p)) : false; }
+        bool InsertInline(DocPoint dp, const InlineInfo&, int16_t len, CellType type) noexcept;
         // insert ruby
         bool InsertRuby(DocPoint, char32_t, U16View, const RichData* = nullptr) noexcept;
         // insert text, pos = min(DocPoint::pos, line-length)
@@ -176,6 +179,10 @@ namespace RichED {
         bool GuiText(U16View view) noexcept;
         // gui: return/enter
         bool GuiReturn() noexcept;
+        // gui: ruby
+        bool GuiRuby(char32_t, U16View, const RichData* = nullptr) noexcept;
+        // gui: inline object
+        bool GuiInline(const InlineInfo&, int16_t len, CellType type) noexcept;
         // gui: backspace
         bool GuiBackspace(bool ctrl) noexcept;
         // gui: delete
@@ -203,8 +210,24 @@ namespace RichED {
         // gui: redo
         bool GuiRedo() noexcept;
     public: // GUI Operation - for Rich Text
-        // font size
-        //bool GuiFontSize() noexcept;
+        // set riched
+        bool GuiRichED(const RichData& rd) noexcept {
+            return gui_riched(0, sizeof(RichData), &rd, true); }
+        // set font size
+        bool GuiFontSize(const unit_t& fs) noexcept {
+            return gui_riched(offsetof(RichData, size), sizeof(fs), &fs, true); }
+        // set font color
+        bool GuiFontColor(const color_t& fc) noexcept {
+            return gui_riched(offsetof(RichData, color), sizeof(fc), &fc, false); }
+        // set font name
+        bool GuiFontName(const fname_t& fn) noexcept {
+            return gui_riched(offsetof(RichData, name), sizeof(fn), &fn, true); }
+        // set under line
+        bool GuiUnerline(FlagSet set) noexcept {
+            return gui_flags(Effect_Underline, set | set_effect); }
+        // set italic
+        bool GuiItalic(FlagSet set) noexcept {
+            return gui_flags(FFlags_Italic, set | set_fflags); }
     public: // helper
         // valign helper h
         void VAlignHelperH(unit_t ar, unit_t height, CellMetrics& m) noexcept;
@@ -238,10 +261,12 @@ namespace RichED {
         DocPoint                m_dpSelEnd;
         // undo op
         uint16_t                m_uUndoOp = 0;
+        // undo ok
+        uint16_t                m_uUndoIsOk = 1;
         // changed flag
         uint16_t                m_flagChanged = 0;
         // unused
-        uint16_t                m_unused_16x3[3];
+        uint16_t                m_unused_16[1];
         // head
         Node                    m_head;
         // tail
