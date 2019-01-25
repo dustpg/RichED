@@ -245,6 +245,16 @@ namespace RichED {
         uint32_t exlen, 
         uint32_t capacity
     ) noexcept->CEDTextCell*;
+
+    // singe op for rich
+    struct RichSingeOp {
+        // under riched
+        RichData        riched;
+        // begin point
+        DocPoint        begin;
+        // end point
+        DocPoint        end;
+    };
 }
 
 // namespace RichED::impl 
@@ -272,6 +282,8 @@ namespace RichED { namespace impl {
     void*rich_undoredo(uint32_t count) noexcept;
     // remove richedtext
     void rich_as_remove(void* ptr, uint16_t id) noexcept;
+    // init rich for set as
+    void rich_init(void* ptr, bool relayout, uint16_t o, uint16_t l, const RichSingeOp& a) noexcept;
     // rich undoredo
     void rich_set(void*, uint32_t, const RichData&, DocPoint, DocPoint) noexcept;
 
@@ -318,6 +330,17 @@ namespace RichED {
         CellPoint   end;
         LogicLine   line2;
         LogicLine*  line1;
+    };
+    // richex ctx
+    struct RichExCtx {
+        // op
+        RichSingeOp     op;
+        // offset
+        uint32_t        offset;
+        // length
+        uint32_t        length;
+        // relayout
+        bool            relayout;
     };
     // hittest
     struct HitTestCtx {
@@ -374,7 +397,7 @@ namespace RichED {
         // remove objects
         static void RecordObjs(CEDTextDocument& doc, DocPoint begin, const CheckRangeCtx&)noexcept;
         // record rich
-        static void RecordRich(CEDTextDocument& doc, DocPoint begin, const CheckRangeCtx&)noexcept;
+        static void RecordRich(CEDTextDocument& doc, DocPoint begin, const CheckRangeCtx&, const RichExCtx*)noexcept;
         // record text
         static void RecordText(CEDTextDocument& doc, DocPoint begin, DocPoint end)noexcept;
         // record obj for ins
@@ -401,6 +424,8 @@ namespace RichED {
         static void AllocUndoFailed(CEDTextDocument& doc) noexcept;
         // create inline object
         static auto CreateInline(CEDTextDocument&, const InlineInfo &, int16_t , CellType ) noexcept->CEDTextCell*;
+        // viewpoint change
+        static void ViewPoint(CEDTextDocument&, Point point) noexcept;
     };
     // RichData ==
     inline bool operator==(const RichData& a, const RichData& b) noexcept {
@@ -536,7 +561,7 @@ void RichED::CEDTextDocument::BeforeRender() noexcept {
     m_flagChanged = 0;
     const auto bottom = m_rcViewport.y + m_rcViewport.height;
     const auto maxbtm = max_unit();
-    Private::ExpandVL(*this, uint32_t(-1), maxbtm);
+    Private::ExpandVL(*this, uint32_t(-1), bottom);
 #ifndef NDEBUG
     this->platform.DebugOutput("<BeforeRender>");
 #endif // !NDEBUG
@@ -577,8 +602,39 @@ void RichED::CEDTextDocument::Render() noexcept {
 /// <param name="pos">The position.</param>
 /// <returns></returns>
 void RichED::CEDTextDocument::SetPos(Point pos) noexcept {
-    m_rcViewport.x = pos.x;
-    m_rcViewport.y = pos.y;
+    Point target_view;
+    // 垂直布局
+    if (m_matrix.read_direction & 1) {
+        target_view.x = pos.y;
+        target_view.y = pos.x;
+    }
+    // 水平布局
+    else {
+        target_view.x = pos.x;
+        target_view.y = pos.y;
+    }
+    Private::ViewPoint(*this, target_view);
+}
+
+
+/// <summary>
+/// Sets the position plus.
+/// </summary>
+/// <param name="pos">The position.</param>
+/// <returns></returns>
+void RichED::CEDTextDocument::SetPosPlus(Point pos) noexcept {
+    Point target_view{ m_rcViewport.x, m_rcViewport.y };
+    // 垂直布局
+    if (m_matrix.read_direction & 1) {
+        target_view.x += pos.y;
+        target_view.y += pos.x;
+    }
+    // 水平布局
+    else {
+        target_view.x += pos.x;
+        target_view.y += pos.y;
+    }
+    Private::ViewPoint(*this, target_view);
 }
 
 
@@ -668,8 +724,11 @@ void RichED::CEDTextDocument::SetAnchorCaret(
     DocPoint anchor, DocPoint caret) noexcept {
     m_dpAnchor = anchor;
     Private::SetSelection(*this, nullptr, caret, impl::mode_target, true);
-    //Private::RefreshCaret(*this, m_dpCaret, nullptr);
-    Private::UpdateSelection(*this, m_dpCaret, m_dpAnchor);
+
+    //Private::UpdateSelection(*this, m_dpCaret, m_dpAnchor);
+    Private::RefreshCaret(*this, m_dpCaret, nullptr);
+    CmpSwap(anchor, caret);
+    Private::RefreshSelection(*this, m_dpSelBegin = anchor, m_dpSelEnd = caret);
 }
 
 
@@ -826,7 +885,7 @@ bool RichED::CEDTextDocument::RemoveText(DocPoint begin, DocPoint end) noexcept 
             // 移除/记录对象
             Private::RecordObjs(*this, begin, ctx);
             // 记录富属性
-            Private::RecordRich(*this, begin, ctx);
+            Private::RecordRich(*this, begin, ctx, nullptr);
         }
         // 记录文本
         Private::RecordText(*this, begin, end);
@@ -841,12 +900,33 @@ bool RichED::CEDTextDocument::RemoveText(DocPoint begin, DocPoint end) noexcept 
 /// <param name="size">The size.</param>
 /// <returns></returns>
 void RichED::CEDTextDocument::Resize(Size size) noexcept {
-    m_rcViewport.width = size.width;
-    m_rcViewport.height = size.height;
+    // 垂直布局
+    if (m_matrix.read_direction & 1) {
+        m_rcViewport.width = size.height;
+        m_rcViewport.height = size.width;
+    }
+    // 水平布局
+    else {
+        m_rcViewport.width = size.width;
+        m_rcViewport.height = size.height;
+    }
     // 清除视觉行
     if (m_vVisual.IsOK()) m_vVisual.Resize(1);
     // 重绘
     RichED::NeedRedraw(*this);
+}
+
+/// <summary>
+/// set Views the point.
+/// </summary>
+/// <param name="doc">The document.</param>
+/// <param name="point">The point.</param>
+/// <returns></returns>
+void RichED::CEDTextDocument::Private::ViewPoint(
+    CEDTextDocument& doc, Point point) noexcept {
+    // 修改才改变
+    if (point.x == doc.m_rcViewport.x && point.y == doc.m_rcViewport.y) return;
+    int bk = 9;
 }
 
 
@@ -1317,6 +1397,16 @@ bool RichED::CEDTextDocument::GuiSelectAll() noexcept {
 }
 
 /// <summary>
+/// GUIs the srcoll view.
+/// </summary>
+/// <param name="">The .</param>
+/// <param name="shift_direction">if set to <c>true</c> [shift direction].</param>
+/// <returns></returns>
+bool RichED::CEDTextDocument::GuiSrcollView(unit_t, bool shift_direction) noexcept {
+    return false;
+}
+
+/// <summary>
 /// GUIs the undo.
 /// </summary>
 /// <returns></returns>
@@ -1336,6 +1426,59 @@ bool RichED::CEDTextDocument::GuiRedo() noexcept {
 //                                Set RichText Format
 // ----------------------------------------------------------------------------
 
+
+/// <summary>
+/// GUIs the riched.
+/// </summary>
+/// <param name="offset">The offset.</param>
+/// <param name="size">The size.</param>
+/// <param name="data">The data.</param>
+/// <param name="relayout">if set to <c>true</c> [relayout].</param>
+/// <returns></returns>
+bool RichED::CEDTextDocument::gui_riched(uint32_t offset, uint32_t size, const void * data, bool relayout) noexcept {
+    // TODO: 没有选择的时候应该将默认的富属性修改为目标?
+    if (Cmp(m_dpSelBegin) == Cmp(m_dpSelEnd)) return false;
+    // 尝试记录
+    detail::op_recorder recorder{ *this };
+    // 正式调用
+    const auto rv = this->set_riched(m_dpSelBegin, m_dpSelEnd, offset, size, data, relayout);
+    // 重新布局?
+    if (relayout) {
+        // 强制更新选择区、插入符
+        if (Cmp(m_dpCaret) != Cmp(m_dpSelBegin))
+            Private::RefreshCaret(*this, m_dpCaret, nullptr);
+        Private::RefreshSelection(*this, m_dpSelBegin, m_dpSelEnd);
+    }
+    RichED::NeedRedraw(*this);
+    return rv;
+}
+
+
+/// <summary>
+/// GUIs the flags.
+/// </summary>
+/// <param name="flags">The flags.</param>
+/// <param name="set">The set.</param>
+/// <returns></returns>
+bool RichED::CEDTextDocument::gui_flags(uint16_t flags, uint32_t set) noexcept {
+    // TODO: 没有选择的时候应该将默认的富属性修改为目标?
+    if (Cmp(m_dpSelBegin) == Cmp(m_dpSelEnd)) return false;
+    // 尝试记录
+    detail::op_recorder recorder{ *this };
+    // 正式调用
+    const auto rv = this->set_flags(m_dpSelBegin, m_dpSelEnd, flags, set);
+    // 重新布局?
+    if (set & set_fflags) {
+        // 强制更新选择区、插入符
+        if (Cmp(m_dpCaret) != Cmp(m_dpSelBegin))
+            Private::RefreshCaret(*this, m_dpCaret, nullptr);
+        Private::RefreshSelection(*this, m_dpSelBegin, m_dpSelEnd);
+    }
+    RichED::NeedRedraw(*this);
+    return rv;
+}
+
+
 /// <summary>
 /// Sets the riched.
 /// </summary>
@@ -1347,37 +1490,48 @@ bool RichED::CEDTextDocument::GuiRedo() noexcept {
 /// <param name="relayout">if set to <c>true</c> [relayout].</param>
 /// <returns></returns>
 bool RichED::CEDTextDocument::set_riched(
-    DocPoint begin, DocPoint end, 
-    size_t offset, size_t size, 
+    DocPoint begin, DocPoint end,
+    uint32_t offset, uint32_t size,
     const void * data, bool relayout) noexcept {
     CheckRangeCtx ctx;
-    // 检测范围合理性
-    if (!Private::CheckRange(*this, begin, end, ctx)) return false;
-
+    RichExCtx richex;
+    CellPoint cp[2];
     // 修改数据
     const auto set_data = [data, offset, size](CEDTextCell& cell) noexcept {
         auto& rd = const_cast<RichData&>(cell.RefRichED());
         char* const dst = reinterpret_cast<char*>(&rd);
-        const char* const src = reinterpret_cast<const char*>(data); 
+        const char* const src = reinterpret_cast<const char*>(data);
         std::memcpy(dst + offset, src, size);
         cell.AsDirty();
     };
-
+    // 检测范围合理性
+    if (!Private::CheckRange(*this, begin, end, ctx)) return false;
     // 针对富属性的范围检测
-    CellPoint cp[2];
     if (!Private::RichRange(ctx, cp)) return false;
+    // TODO: BEGIN/END修改
+
+    // 处理存在撤销栈的情况
+    if (Private::IsRecord(*this)) {
+        richex.op.begin = begin;
+        richex.op.end = end;
+        richex.op.riched = this->default_riched;
+        richex.offset = offset;
+        richex.length = size;
+        richex.relayout = relayout;
+        std::memcpy(reinterpret_cast<char*>(&richex.op.riched) + offset, data, size);
+        // 记录富属性
+        Private::RecordRich(*this, begin, ctx, &richex);
+    }
     // 解包
     const auto cell1 = cp[0].cell;
     const auto pos1 = cp[0].offset;
     const auto cell2 = cp[1].cell;
     const auto pos2 = cp[1].offset;
-
     // 细胞分裂: 由于cell1可能等于cell2, 所以先分裂cell2
     const auto e = cell2->Split(pos2);
     const auto b = cell1->Split(pos1);
     if (b && e) {
         const auto cfor = detail::cfor_cells(b, e);
-        RichED::NeedRedraw(*this);
         for (auto& cell : cfor) set_data(cell);
         // 重新布局
         if (relayout) Private::Dirty(*this, *cell1, begin.line);
@@ -1400,30 +1554,6 @@ bool RichED::CEDTextDocument::set_riched(
 }
 
 
-/// <summary>
-/// GUIs the riched.
-/// </summary>
-/// <param name="offset">The offset.</param>
-/// <param name="size">The size.</param>
-/// <param name="data">The data.</param>
-/// <param name="relayout">if set to <c>true</c> [relayout].</param>
-/// <returns></returns>
-bool RichED::CEDTextDocument::gui_riched(size_t offset, size_t size, const void * data, bool relayout) noexcept {
-    assert(!"NOT IMPL");
-    return false;
-}
-
-/// <summary>
-/// GUIs the flags.
-/// </summary>
-/// <param name="flags">The flags.</param>
-/// <param name="set">The set.</param>
-/// <returns></returns>
-bool RichED::CEDTextDocument::gui_flags(uint16_t flags, uint32_t set) noexcept {
-    assert(!"NOT IMPL");
-    return false;
-}
-
 
 /// <summary>
 /// Sets the flags.
@@ -1436,9 +1566,24 @@ bool RichED::CEDTextDocument::gui_flags(uint16_t flags, uint32_t set) noexcept {
 bool RichED::CEDTextDocument::set_flags(
     DocPoint begin, DocPoint end, 
     uint16_t flags, uint32_t set) noexcept {
+    RichExCtx richex;
     CheckRangeCtx ctx;
     // 检测范围合理性
     if (!Private::CheckRange(*this, begin, end, ctx)) return false;
+    // TODO: 针对富属性的范围检测
+    //if (!Private::RichRange(ctx, cp)) return false;
+    // 处理存在撤销栈的情况
+    if (Private::IsRecord(*this)) {
+        richex.op.begin = begin;
+        richex.op.end = end;
+        richex.op.riched = this->default_riched;
+        richex.op.riched.fflags = static_cast<FFlags>(flags);
+        richex.offset = set;
+        richex.length = 0;
+        richex.relayout = false;
+        // 记录富属性
+        Private::RecordRich(*this, begin, ctx, &richex);
+    }
     // 解包
     const auto cell1 = ctx.begin.cell;
     const auto pos1 = ctx.begin.offset;
@@ -1896,7 +2041,6 @@ void RichED::CEDTextDocument::Private::SetSelection(
         );
         doc.platform.DebugOutput(buf);
 #endif // !NDEBUG
-
     }
 }
 
@@ -2274,11 +2418,12 @@ bool RichED::CEDTextDocument::Private::RichRange(
 /// </summary>
 /// <param name="doc">The document.</param>
 /// <param name="begin">The begin.</param>
-/// <param name="end">The end.</param>
 /// <param name="ctx">The CTX.</param>
+/// <param name="richex">The richex.</param>
 /// <returns></returns>
 void RichED::CEDTextDocument::Private::RecordRich(
-    CEDTextDocument & doc, DocPoint begin, const CheckRangeCtx& ctx) noexcept {
+    CEDTextDocument & doc, DocPoint begin, 
+    const CheckRangeCtx& ctx, const RichExCtx* richex) noexcept {
     assert(ctx.begin.cell != ctx.end.cell || ctx.begin.offset != ctx.end.offset);
     // 针对富属性的范围检测
     CellPoint cp[2];
@@ -2307,6 +2452,12 @@ void RichED::CEDTextDocument::Private::RecordRich(
     if (!data) return Private::AllocUndoFailed(doc);
     // 删除富属
     impl::rich_as_remove(data, doc.m_uUndoOp++);
+    // 针对富属性修改的
+    if (richex) {
+        const uint16_t o = static_cast<uint16_t>(richex->offset);
+        const uint16_t l = static_cast<uint16_t>(richex->length);
+        impl::rich_init(data, richex->relayout, o, l, richex->op);
+    }
     // 换行
     if (ctx.begin.cell != cell1) {
         if (ctx.begin.cell->RefMetaInfo().eol) {

@@ -18,7 +18,7 @@ enum { DEF_FONT_SIZE = 42 };
 
 enum { CTRL_X = 100, CTRL_Y = 100,  };
 
-float ctrl_w = 800, ctrl_h = 600;
+float ctrl_w = 800, ctrl_h = 200;
 
 static const wchar_t* const FONT_NAME_LIST[] = {
      L"Arial",
@@ -557,26 +557,17 @@ LRESULT WinDWnD2D::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
         case VK_DELETE:
             gui_op = g_platform.Doc().GuiDelete(ctrl);
             break;
-    //    }
-    //    break;
-    //case WM_SYSKEYDOWN:
-    //    handled = true;
-    //    switch (wParam)
-    //    {
-    //    default:
-    //        handled = false;
-    //        break;
         case VK_F1:
-            g_platform.Doc().GuiFontSize(20.f);
+            gui_op = g_platform.Doc().GuiFontSize(20.f);
             break;
         case VK_F2:
-            g_platform.Doc().SetFontColor({ 0, 7 }, { 0, 8 }, 0xff0000);
+            gui_op = g_platform.Doc().GuiFontName(2);
             break;
         case VK_F3:
-            g_platform.Doc().SetFontName({ 0, 7 }, { 0, 8 }, 2);
+            gui_op = g_platform.Doc().GuiUnerline(CEDTextDocument::Set_Change);
             break;
         case VK_F4:
-            g_platform.Doc().SetUnerline({ 0, 4 }, { 0, 8 }, CEDTextDocument::Set_Change);
+            gui_op = g_platform.Doc().GuiItalic(CEDTextDocument::Set_Change);
             break;
         case VK_F5:
             ctrl_w += 10.f;

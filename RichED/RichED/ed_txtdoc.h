@@ -69,17 +69,17 @@ namespace RichED {
         // set riched
         bool set_riched(
             DocPoint begin, DocPoint end,
-            size_t offset, size_t size, 
+            uint32_t offset, uint32_t size,
             const void* data, bool relayout
         ) noexcept;
         // set flags
         bool set_flags(
             DocPoint begin, DocPoint end,
-            uint16_t flags,  uint32_t set
+            uint16_t flags, uint32_t set
         ) noexcept;
         // gui: set riched
         bool gui_riched(
-            size_t offset, size_t size,
+            uint32_t offset, uint32_t size,
             const void* data, bool relayout
         ) noexcept;
         // set flags
@@ -97,6 +97,8 @@ namespace RichED {
         void BeforeRender() noexcept;
         // render
         void Render() noexcept;
+        // add current doc view-point pos
+        void SetPosPlus(Point) noexcept;
         // set doc view-point pos
         void SetPos(Point) noexcept;
         // resize doc view-zone
@@ -205,6 +207,8 @@ namespace RichED {
         bool GuiPageDown(bool ctrl, bool shift) noexcept;
         // gui: select all
         bool GuiSelectAll() noexcept;
+        // gui: scroll view
+        bool GuiSrcollView(unit_t, bool shift_direction) noexcept;
         // gui: undo
         bool GuiUndo() noexcept;
         // gui: redo

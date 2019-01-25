@@ -41,7 +41,42 @@ namespace RichED {
     struct CEDTextDocument::Private {
         // set caret data
         static void AnchorCaret(CEDTextDocument& doc,  TrivialUndoRedo& op) noexcept;
+        // set riched
+        static bool SetRichED(CEDTextDocument&, DocPoint, DocPoint, size_t, size_t, const void*, bool) noexcept;
+        // set flags
+        static bool SetFlagS(CEDTextDocument&, DocPoint, DocPoint, uint16_t, uint32_t) noexcept;
     };
+}
+
+
+/// <summary>
+/// Sets the rich ed.
+/// </summary>
+/// <param name="a">a.</param>
+/// <param name="b">The b.</param>
+/// <param name="c">The c.</param>
+/// <param name="d">The d.</param>
+/// <param name="e">The e.</param>
+/// <param name="f">The f.</param>
+/// <param name="g">if set to <c>true</c> [g].</param>
+/// <returns></returns>
+bool RichED::CEDTextDocument::Private::SetRichED(
+    CEDTextDocument&a, DocPoint b, DocPoint c, size_t d, size_t e, const void * f, bool g) noexcept {
+    return a.set_riched(b, c, d, e, f, g);
+}
+
+/// <summary>
+/// Sets the flag s.
+/// </summary>
+/// <param name="a">a.</param>
+/// <param name="b">The b.</param>
+/// <param name="c">The c.</param>
+/// <param name="d">The d.</param>
+/// <param name="e">The e.</param>
+/// <returns></returns>
+bool RichED::CEDTextDocument::Private::SetFlagS(
+    CEDTextDocument & a, DocPoint b, DocPoint c, uint16_t d, uint32_t e) noexcept {
+    return a.set_flags(b, c, d, e);
 }
 
 
@@ -293,21 +328,49 @@ namespace RichED {
     struct RichGroupOp {
         // op for rollback
         RichSingeOp     back;
+        // back offset
+        uint16_t        back_offset;
+        // back length
+        uint16_t        back_length;
+        // relayout
+        bool            relayout;
+        // unused
+        bool            unused[3];
         // ops for execute
         RichSingeOp     exec[1];
     };
     // Rollback rich
     void RollbackRich(CEDTextDocument& doc, TrivialUndoRedo& op) noexcept {
         const auto data = reinterpret_cast<RichGroupOp*>(&op + 1);
-        doc.SetRichED(data->back.begin, data->back.end, data->back.riched);
+        const auto ptr = reinterpret_cast<char*>(&data->back.riched) + data->back_offset;
+        if (data->back_length) {
+            CEDTextDocument::Private::SetRichED(
+                doc, data->back.begin, data->back.end,
+                data->back_offset, data->back_length,
+                ptr, data->relayout
+            );
+        }
+        // 长度为0则是设置FLAG
+        else {
+            const uint16_t flags = static_cast<uint16_t>(data->back.riched.fflags);
+            CEDTextDocument::Private::SetFlagS(
+                doc, data->back.begin, data->back.end,
+                flags, data->back_offset
+            );
+        }
     }
     // execute rich
     void ExecuteRich(CEDTextDocument& doc, TrivialUndoRedo& op) noexcept {
         const auto data = reinterpret_cast<RichGroupOp*>(&op + 1);
         const auto end_ptr = reinterpret_cast<char*>(&op.bytes_from_here) + op.bytes_from_here;
         const auto end_itr = reinterpret_cast<RichSingeOp*>(end_ptr);
-        std::for_each(data->exec, end_itr, [&doc](const RichSingeOp& op)noexcept {
-            doc.SetRichED(op.begin, op.end, op.riched);
+        const auto relayout = data->relayout;
+        std::for_each(data->exec, end_itr, [&doc, relayout](const RichSingeOp& op)noexcept {
+            CEDTextDocument::Private::SetRichED(
+                doc, op.begin, op.end,
+                0, sizeof(op.riched),
+                &op.riched, relayout
+            );
         });
     }
 }
@@ -361,6 +424,8 @@ namespace RichED {
         Op_InsertObjs,
         // insert: ruby
         Op_InsertRuby,
+        // setas: rich
+        Op_SetAsRich,
     };
     namespace impl {
         /// <summary>
@@ -371,7 +436,7 @@ namespace RichED {
         void* rich_undoredo(uint32_t count) noexcept {
             assert(count);
             const size_t len = sizeof(TrivialUndoRedo)
-                + sizeof(RichSingeOp)
+                + (sizeof(RichGroupOp) - sizeof(RichSingeOp))
                 + sizeof(RichSingeOp) * count
                 ;
             const auto ptr = std::malloc(len);
@@ -390,8 +455,26 @@ namespace RichED {
         void rich_as_remove(void* ptr, uint16_t id) noexcept {
             assert(ptr && id);
             const auto op = reinterpret_cast<TrivialUndoRedo*>(ptr);
+            const auto ops = reinterpret_cast<RichGroupOp*>(op + 1);
             op->type = Op_RemoveRich;
             op->decorator = id - 1;
+            ops->relayout = true;
+        }
+        /// <summary>
+        /// Riches the initialize.
+        /// </summary>
+        /// <param name="ptr">The PTR.</param>
+        /// <param name="relayout">if set to <c>true</c> [relayout].</param>
+        /// <returns></returns>
+        void rich_init(void* ptr, bool relayout, uint16_t o, uint16_t l, const RichSingeOp& a) noexcept {
+            assert(ptr);
+            const auto op = reinterpret_cast<TrivialUndoRedo*>(ptr);
+            op->type = Op_SetAsRich;
+            const auto ops = reinterpret_cast<RichGroupOp*>(op + 1);
+            ops->relayout = relayout;
+            ops->back = a;
+            ops->back_offset = o;
+            ops->back_length = l;
         }
         /// <summary>
         /// Riches the set.
@@ -661,6 +744,13 @@ namespace RichED {
             // - 重做: 插入注音
             op.undo = RichED::RemoveRuby;
             op.redo = RichED::ExecuteRuby;
+            break;
+        case Op_SetAsRich:
+            // 修改富属性
+            // - 撤销: 执行富属性
+            // - 重做: 修改富属性
+            op.undo = RichED::ExecuteRich;
+            op.redo = RichED::RollbackRich;
             break;
         }
     }
