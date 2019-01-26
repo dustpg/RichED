@@ -724,11 +724,14 @@ void RichED::CEDTextDocument::SetAnchorCaret(
     DocPoint anchor, DocPoint caret) noexcept {
     m_dpAnchor = anchor;
     Private::SetSelection(*this, nullptr, caret, impl::mode_target, true);
+    Private::RefreshCaret(*this, m_dpCaret, nullptr);
 
     //Private::UpdateSelection(*this, m_dpCaret, m_dpAnchor);
-    Private::RefreshCaret(*this, m_dpCaret, nullptr);
+
     CmpSwap(anchor, caret);
-    Private::RefreshSelection(*this, m_dpSelBegin = anchor, m_dpSelEnd = caret);
+    m_dpSelBegin = anchor;
+    m_dpSelEnd = caret;
+    Private::RefreshSelection(*this, anchor, caret);
 }
 
 
@@ -992,15 +995,10 @@ void RichED::CEDTextDocument::GenText(CtxPtr ctx, DocPoint begin, DocPoint end) 
 /// <param name="lf">The lf.</param>
 /// <returns></returns>
 void RichED::CEDTextDocument::SetLineFeed(const LineFeed lf) noexcept {
-    const auto prev_len = m_linefeed.length;
+    //const auto prev_len = m_linefeed.length;
     m_linefeed = lf;
     // 文本修改
     Private::ValueChanged(*this, IEDTextPlatform::Changed_Text);
-    // 文本长度修改
-    if (prev_len != lf.length) {
-        // TODO:
-        assert(!"NOT IMPL");
-    }
 }
 
 /// <summary>

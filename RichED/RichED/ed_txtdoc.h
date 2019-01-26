@@ -49,9 +49,9 @@ namespace RichED {
         CEDTextCell*    first;
         // logic line 
         uint32_t        lineno;
-        // char offset for this logic line, 0 for first VL in LL
+        // char offset for this visual-line
         uint32_t        char_len_before;
-        // char offset for this logic line, 0 for first VL in LL
+        // char length for this visual-line
         uint32_t        char_len_this;
         // offset for this visual-line
         unit_t          offset;
