@@ -558,7 +558,7 @@ RichED::CEDTextDocument::~CEDTextDocument() noexcept {
 /// </summary>
 /// <returns></returns>
 void RichED::CEDTextDocument::BeforeRender() noexcept {
-    m_flagChanged = 0;
+    //m_flagChanged = 0;
     const auto bottom = m_rcViewport.y + m_rcViewport.height;
     const auto maxbtm = max_unit();
     Private::ExpandVL(*this, uint32_t(-1), bottom);
@@ -944,6 +944,8 @@ template<typename T, typename U>
 void RichED::CEDTextDocument::Private::GenText(
     CEDTextDocument& doc, DocPoint begin, DocPoint end, 
     T append, U linefeed) noexcept {
+    // TODO: 全文获取?
+
     CheckRangeCtx ctx;
     // 检测范围合理性
     if (!Private::CheckRange(doc, begin, end, ctx)) return;
@@ -1434,6 +1436,8 @@ bool RichED::CEDTextDocument::GuiRedo() noexcept {
 /// <param name="relayout">if set to <c>true</c> [relayout].</param>
 /// <returns></returns>
 bool RichED::CEDTextDocument::gui_riched(uint32_t offset, uint32_t size, const void * data, bool relayout) noexcept {
+    // 只读
+    if (m_info.flags & Flag_GuiReadOnly) return false;
     // TODO: 没有选择的时候应该将默认的富属性修改为目标?
     if (Cmp(m_dpSelBegin) == Cmp(m_dpSelEnd)) return false;
     // 尝试记录
@@ -1459,6 +1463,8 @@ bool RichED::CEDTextDocument::gui_riched(uint32_t offset, uint32_t size, const v
 /// <param name="set">The set.</param>
 /// <returns></returns>
 bool RichED::CEDTextDocument::gui_flags(uint16_t flags, uint32_t set) noexcept {
+    // 只读
+    if (m_info.flags & Flag_GuiReadOnly) return false;
     // TODO: 没有选择的时候应该将默认的富属性修改为目标?
     if (Cmp(m_dpSelBegin) == Cmp(m_dpSelEnd)) return false;
     // 尝试记录
@@ -3190,9 +3196,9 @@ void RichED::CEDTextDocument::Private::ValueChanged(
     CEDTextDocument & doc, uint32_t id) noexcept {
     assert(id < 16);
     // 仅仅允许每帧的第一个修改
-    const uint16_t mask = 1 << id;
-    if (doc.m_flagChanged & mask) return;
-    doc.m_flagChanged |= mask;
+    //const uint16_t mask = 1 << id;
+    //if (doc.m_flagChanged & mask) return;
+    //doc.m_flagChanged |= mask;
     doc.platform.ValueChanged(static_cast<IEDTextPlatform::Changed>(id));
 }
 

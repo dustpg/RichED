@@ -268,9 +268,9 @@ namespace RichED {
         // undo ok
         uint16_t                m_uUndoIsOk = 1;
         // changed flag
-        uint16_t                m_flagChanged = 0;
+        //uint16_t                m_flagChanged = 0;
         // unused
-        uint16_t                m_unused_16[1];
+        uint16_t                m_unused_16[2];
         // head
         Node                    m_head;
         // tail
