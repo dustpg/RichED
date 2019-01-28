@@ -14,11 +14,18 @@ enum { WINDOW_WIDTH = 1280, WINDOW_HEIGHT = 720 };
 static const wchar_t WINDOW_TITLE[] = L"RichED - DWnD2D";
 enum { ECODE_FAILED = -1, ECODE_OOM = -2, ECODE_DRAW = -3, ECODE_RESIZE = -4 };
 
-enum { DEF_FONT_SIZE = 42 };
+enum { DEF_FONT_SIZE = 42, UPDATE_DELTA_TIME = 20 };
 
 enum { CTRL_X = 100, CTRL_Y = 100,  };
 
 float ctrl_w = 800, ctrl_h = 200;
+
+
+enum : uintptr_t {
+    TIMER_ID_NULL = 0,
+    TIMER_ID_BLINK,
+    TIMER_ID_UPDATE,
+};
 
 static const wchar_t* const FONT_NAME_LIST[] = {
      L"Arial",
@@ -76,8 +83,6 @@ struct WinDWnD2D final : IEDTextPlatform {
     WinDWnD2D() noexcept {}
     // on out of memory, won't be called on ctor
     auto OnOOM(uint32_t retry_count) noexcept->HandleOOM override { std::exit(ECODE_OOM); return OOM_NoReturn; }
-    // value changed
-    void ValueChanged(Changed) noexcept override;
     // is valid password
     bool IsValidPassword(char32_t ch) noexcept override { return ch < 128; }
     // append text
@@ -133,6 +138,7 @@ struct WinDWnD2D final : IEDTextPlatform {
     void Resize(uint32_t width, uint32_t height) noexcept;
     // render
     void Render() noexcept;
+    void Update() noexcept;
 
     void DrawSelection() noexcept;
 
@@ -214,8 +220,9 @@ int main() {
         ::UpdateWindow(hwnd);
         const auto blink = ::GetCaretBlinkTime();
         g_platform.caret_blink_time = blink;
-        const auto id = reinterpret_cast<uintptr_t>(&g_platform);
-        ::SetTimer(hwnd, id, blink, nullptr);
+        //const auto id = reinterpret_cast<uintptr_t>(&g_platform);
+        ::SetTimer(hwnd, TIMER_ID_BLINK, blink, nullptr);
+        ::SetTimer(hwnd, TIMER_ID_UPDATE, UPDATE_DELTA_TIME, nullptr);
         MSG msg = { 0 };
         while (GetMessageW(&msg, nullptr, 0, 0)) {
             ::TranslateMessage(&msg);
@@ -418,8 +425,17 @@ LRESULT WinDWnD2D::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
         result = 0;
         break;
     case WM_TIMER:
-        g_platform.caret_blink_i ^= 1;
-        ::InvalidateRect(hwnd, nullptr, false);
+        switch (wParam)
+        {
+        case TIMER_ID_BLINK:
+            g_platform.caret_blink_i ^= 1;
+            ::InvalidateRect(hwnd, nullptr, false);
+            break;
+        case TIMER_ID_UPDATE:
+            g_platform.Update();
+            break;
+        }
+        handled = true;
         break;
     case WM_MOUSEMOVE:
         x = int16_t(LOWORD(lParam)) - CTRL_X;
@@ -841,32 +857,6 @@ void WinDWnD2D::DrawContextImage(CEDTextCell & cell, unit_t baseline) noexcept {
     }
 }
 
-/// <summary>
-/// Values the changed.
-/// </summary>
-/// <param name="changed">The changed.</param>
-/// <returns></returns>
-void WinDWnD2D::ValueChanged(Changed changed) noexcept {
-    switch (changed)
-    {
-    case RichED::IEDTextPlatform::Changed_View:
-        ::InvalidateRect(this->data.hwnd, nullptr, false);
-        break;
-    case RichED::IEDTextPlatform::Changed_Selection:
-        break;
-    case RichED::IEDTextPlatform::Changed_Caret:
-        ::SetTimer(data.hwnd, reinterpret_cast<uintptr_t>(this), caret_blink_time, nullptr);
-        this->caret_blink_i = 1;
-        ::InvalidateRect(this->data.hwnd, nullptr, false);
-        break;
-    case RichED::IEDTextPlatform::Changed_Text:
-        break;
-    case RichED::IEDTextPlatform::Changed_EstimatedWidth:
-        break;
-    case RichED::IEDTextPlatform::Changed_EstimatedHeight:
-        break;
-    }
-}
 
 /// <summary>
 /// Hits the test image.
@@ -1014,12 +1004,27 @@ void WinDWnD2D::DrawSelection() noexcept {
     }
 }
 
+void WinDWnD2D::Update() noexcept {
+    const auto flag = this->Doc().Update();
+    // View
+    if (flag & Changed_View) {
+        ::InvalidateRect(this->data.hwnd, nullptr, false);
+    }
+    // Caret
+    if (flag & Changed_Caret) {
+        ::SetTimer(data.hwnd, reinterpret_cast<uintptr_t>(this), caret_blink_time, nullptr);
+        this->caret_blink_i = 1;
+        ::InvalidateRect(this->data.hwnd, nullptr, false);
+    }
+
+}
+
 /// <summary>
 /// Renders this instance.
 /// </summary>
 /// <returns></returns>
 void WinDWnD2D::Render() noexcept {
-    this->Doc().BeforeRender();
+    //this->Doc().BeforeRender();
     this->cell_draw_i = 0;
 
     const auto renderer = this->data.d2d_rendertarget;

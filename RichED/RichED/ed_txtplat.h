@@ -33,25 +33,8 @@ namespace RichED {
     class CEDTextCell;
     // text platform
     struct PCN_NOVTABLE IEDTextPlatform {
-        // value changed
-        enum Changed: uint32_t {
-            // view changed, need redraw
-            Changed_View = 0,
-            // selection changed
-            Changed_Selection,
-            // caret changed
-            Changed_Caret,
-            // text changed
-            Changed_Text,
-            // estimated width changed
-            Changed_EstimatedWidth,
-            // estimated height changed
-            Changed_EstimatedHeight,
-        };
         // on out of memory, won't be called on ctor
         virtual auto OnOOM(uint32_t retry_count) noexcept ->HandleOOM = 0;
-        // value changed
-        virtual void ValueChanged(Changed) noexcept = 0;
         // is valid password
         virtual bool IsValidPassword(char32_t) noexcept = 0;
         // append text

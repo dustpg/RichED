@@ -60,8 +60,8 @@ namespace RichED {
         // max deascender-height in this visual-line
         unit_t          dr_height_max;
     };
-    // functions
-    //using funcptr_t = void(*)(int);
+    // value changed flag
+    enum ValuedChanged : uint32_t;
     // text document
     class CEDTextDocument {
         // flag set private
@@ -94,7 +94,7 @@ namespace RichED {
         // no copy ctor
         CEDTextDocument(const CEDTextDocument&) noexcept = delete;
         // update
-        void BeforeRender() noexcept;
+        auto Update() noexcept->ValuedChanged;
         // render
         void Render() noexcept;
         // add current doc view-point pos
@@ -268,9 +268,7 @@ namespace RichED {
         // undo ok
         uint16_t                m_uUndoIsOk = 1;
         // changed flag
-        //uint16_t                m_flagChanged = 0;
-        // unused
-        uint16_t                m_unused_16[2];
+        uint32_t                m_flagChanged = 0;
         // head
         Node                    m_head;
         // tail
@@ -285,5 +283,20 @@ namespace RichED {
         CEDBuffer<LogicLine>    m_vLogic;
         // selection data
         CEDBuffer<Box>          m_vSelection;
+    };
+    // value changed
+    enum ValuedChanged : uint32_t {
+        // view changed, need redraw
+        Changed_View            = 1 << 0,
+        // selection changed
+        Changed_Selection       = 1 << 1,
+        // caret changed
+        Changed_Caret           = 1 << 2,
+        // text changed
+        Changed_Text            = 1 << 3,
+        // estimated width changed
+        Changed_EstimatedWidth  = 1 << 4,
+        // estimated height changed
+        Changed_EstimatedHeight = 1 << 5,
     };
 }

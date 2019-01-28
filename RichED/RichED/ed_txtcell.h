@@ -101,6 +101,5 @@ namespace RichED {
     auto CreateNormalCell(CEDTextDocument& doc, const RichData&)->CEDTextCell*;
     // create a sharinked cell 
     auto CreateShrinkedCell(CEDTextDocument& doc, const RichData&)->CEDTextCell*;
-
 }
 

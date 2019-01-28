@@ -418,14 +418,16 @@ namespace RichED {
         static auto WordLeft(CEDTextDocument& doc, DocPoint) noexcept->DocPoint;
         // word right move
         static auto WordRight(CEDTextDocument& doc, DocPoint) noexcept->DocPoint;
-        // value changed
-        static void ValueChanged(CEDTextDocument& doc, uint32_t id) noexcept;
         // on alloc undo-op failed
         static void AllocUndoFailed(CEDTextDocument& doc) noexcept;
         // create inline object
         static auto CreateInline(CEDTextDocument&, const InlineInfo &, int16_t , CellType ) noexcept->CEDTextCell*;
         // viewpoint change
         static void ViewPoint(CEDTextDocument&, Point point) noexcept;
+        // value changed
+        static void ValueChanged(CEDTextDocument& doc, uint32_t flag) noexcept { doc.m_flagChanged |= flag; }
+        // need redraw
+        static void NeedRedraw(CEDTextDocument& doc) noexcept { ValueChanged(doc, Changed_View); }
     };
     // RichData ==
     inline bool operator==(const RichData& a, const RichData& b) noexcept {
@@ -433,9 +435,6 @@ namespace RichED {
     // RichData !==
     inline bool operator!=(const RichData& a, const RichData& b) noexcept {
         return !(a == b); }
-    // redraw
-    inline void NeedRedraw(CEDTextDocument& doc) noexcept {
-        CEDTextDocument::Private::ValueChanged(doc, IEDTextPlatform::Changed_View); }
     // cmp
     inline auto Cmp(DocPoint dp) noexcept {
         uint64_t u64;
@@ -557,14 +556,18 @@ RichED::CEDTextDocument::~CEDTextDocument() noexcept {
 /// Updates this instance.
 /// </summary>
 /// <returns></returns>
-void RichED::CEDTextDocument::BeforeRender() noexcept {
-    //m_flagChanged = 0;
-    const auto bottom = m_rcViewport.y + m_rcViewport.height;
-    const auto maxbtm = max_unit();
-    Private::ExpandVL(*this, uint32_t(-1), bottom);
+auto RichED::CEDTextDocument::Update() noexcept -> ValuedChanged {
+    const auto rv = m_flagChanged;
+    m_flagChanged = 0;
+    if (rv & Changed_View) {
+        const auto bottom = m_rcViewport.y + m_rcViewport.height;
+        const auto maxbtm = max_unit();
+        Private::ExpandVL(*this, uint32_t(-1), bottom);
 #ifndef NDEBUG
-    this->platform.DebugOutput("<BeforeRender>");
+        this->platform.DebugOutput("<BeforeRender>");
 #endif // !NDEBUG
+    }
+    return static_cast<ValuedChanged>(rv);
 }
 
 /// <summary>
@@ -916,7 +919,7 @@ void RichED::CEDTextDocument::Resize(Size size) noexcept {
     // 清除视觉行
     if (m_vVisual.IsOK()) m_vVisual.Resize(1);
     // 重绘
-    RichED::NeedRedraw(*this);
+    Private::NeedRedraw(*this);
 }
 
 /// <summary>
@@ -1000,7 +1003,7 @@ void RichED::CEDTextDocument::SetLineFeed(const LineFeed lf) noexcept {
     //const auto prev_len = m_linefeed.length;
     m_linefeed = lf;
     // 文本修改
-    Private::ValueChanged(*this, IEDTextPlatform::Changed_Text);
+    Private::ValueChanged(*this, Changed_Text);
 }
 
 /// <summary>
@@ -1451,7 +1454,7 @@ bool RichED::CEDTextDocument::gui_riched(uint32_t offset, uint32_t size, const v
             Private::RefreshCaret(*this, m_dpCaret, nullptr);
         Private::RefreshSelection(*this, m_dpSelBegin, m_dpSelEnd);
     }
-    RichED::NeedRedraw(*this);
+    Private::NeedRedraw(*this);
     return rv;
 }
 
@@ -1478,7 +1481,7 @@ bool RichED::CEDTextDocument::gui_flags(uint16_t flags, uint32_t set) noexcept {
             Private::RefreshCaret(*this, m_dpCaret, nullptr);
         Private::RefreshSelection(*this, m_dpSelBegin, m_dpSelEnd);
     }
-    RichED::NeedRedraw(*this);
+    Private::NeedRedraw(*this);
     return rv;
 }
 
@@ -1632,7 +1635,7 @@ bool RichED::CEDTextDocument::set_flags(
     const auto b = cell1->Split(pos1);
     if (b && e) {
         const auto cfor = detail::cfor_cells(b, e);
-        RichED::NeedRedraw(*this);
+        Private::NeedRedraw(*this);
         for (auto& cell : cfor) set_data(cell);
         // 重新布局
         if (change_font_flags) {
@@ -2064,7 +2067,7 @@ bool RichED::CEDTextDocument::Private::Insert(
     U16View view, LogicLine linedata, 
     bool behind) noexcept {
     // 需要重绘
-    RichED::NeedRedraw(doc);
+    Private::NeedRedraw(doc);
     // 断言检测
     assert(GetLineTextLength(linedata.first) == linedata.length);
     assert(dp.pos <= linedata.length);
@@ -2263,7 +2266,7 @@ bool RichED::CEDTextDocument::Private::Insert(
     CEDTextDocument& doc, DocPoint dp, CEDTextCell& obj, 
     LogicLine& line_data) noexcept {
     // 需要重绘
-    RichED::NeedRedraw(doc);
+    Private::NeedRedraw(doc);
     assert(obj.RefMetaInfo().eol == false && "cannot insert EOL");
     auto pos = dp.pos;
     auto cell = line_data.first;
@@ -2635,7 +2638,7 @@ bool RichED::CEDTextDocument::Private::RemoveText(
     const auto line_data2 = ctx.line2;
     const auto next_is_first_to_line_1 = line_data1.first->prev;
     // 需要重绘
-    RichED::NeedRedraw(doc);
+    Private::NeedRedraw(doc);
     // 标记为脏
     Private::Dirty(doc, *cell1, begin.line);
     // 处理
@@ -2968,7 +2971,7 @@ void RichED::CEDTextDocument::Private::RefreshCaret(
             = ctx.visual_line->ar_height_max
             + ctx.visual_line->dr_height_max
             ;
-        Private::ValueChanged(doc, IEDTextPlatform::Changed_Caret);
+        Private::ValueChanged(doc, Changed_Caret);
     }
 
     // TODO: 部分情况视口跟随插入符
@@ -2996,7 +2999,7 @@ void RichED::CEDTextDocument::Private::UpdateSelection(
     doc.m_dpSelBegin = begin;
     doc.m_dpSelEnd = end;
     Private::RefreshSelection(doc, begin, end);
-    Private::ValueChanged(doc, IEDTextPlatform::Changed_Selection);
+    Private::ValueChanged(doc, Changed_Selection);
 }
 
 /// <summary>
@@ -3183,23 +3186,6 @@ auto RichED::CEDTextDocument::Private::WordRight(
     CEDTextDocument & doc, DocPoint dp) noexcept -> DocPoint {
     // TODO: 具体实现
     return Private::LogicRight(doc, dp);
-}
-
-
-/// <summary>
-/// Values the changed.
-/// </summary>
-/// <param name="doc">The document.</param>
-/// <param name="id">The identifier.</param>
-/// <returns></returns>
-void RichED::CEDTextDocument::Private::ValueChanged(
-    CEDTextDocument & doc, uint32_t id) noexcept {
-    assert(id < 16);
-    // 仅仅允许每帧的第一个修改
-    //const uint16_t mask = 1 << id;
-    //if (doc.m_flagChanged & mask) return;
-    //doc.m_flagChanged |= mask;
-    doc.platform.ValueChanged(static_cast<IEDTextPlatform::Changed>(id));
 }
 
 
