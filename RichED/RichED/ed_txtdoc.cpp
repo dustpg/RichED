@@ -575,27 +575,23 @@ auto RichED::CEDTextDocument::Update() noexcept -> ValuedChanged {
 /// </summary>
 /// <returns></returns>
 void RichED::CEDTextDocument::Render() noexcept {
-    if (m_vVisual.GetSize()) {
-        const auto count = m_vVisual.GetSize();
-        const auto data = m_vVisual.GetData();
-        const auto end_line = data + count - 1;
-        auto this_line = data;
-        // [0, count - 1)
-        while (this_line != end_line) {
-            const auto next_line = this_line + 1;
-            const auto cells = detail::cfor_cells(this_line->first, next_line->first);
-            const auto baseline = this_line->offset + this_line->ar_height_max;
-            // TODO: 固定行高
-            for (auto& cell : cells) {
-                this->platform.DrawContext(cell, baseline);
-            }
-            this_line = next_line;
+    const auto count = m_vVisual.GetSize();
+    if (!count) return;
+
+    const auto data = m_vVisual.GetData();
+    const auto end_line = data + count - 1;
+    auto this_line = data;
+    // [0, count - 1)
+    while (this_line != end_line) {
+        const auto next_line = this_line + 1;
+        const auto cells = detail::cfor_cells(this_line->first, next_line->first);
+        const auto baseline = this_line->offset + this_line->ar_height_max;
+        // TODO: 固定行高
+        for (auto& cell : cells) {
+            this->platform.DrawContext(cell, baseline);
         }
+        this_line = next_line;
     }
-    //const auto cells = detail::cfor_cells(m_head.next, &m_tail);
-    //for (auto& cell : cells) {
-    //    this->platform.DrawContext(const_cast<CEDTextCell&>(cell));
-    //}
 }
 
 
@@ -625,7 +621,7 @@ void RichED::CEDTextDocument::SetPos(Point pos) noexcept {
 /// </summary>
 /// <param name="pos">The position.</param>
 /// <returns></returns>
-void RichED::CEDTextDocument::SetPosPlus(Point pos) noexcept {
+void RichED::CEDTextDocument::AddPos(Point pos) noexcept {
     Point target_view{ m_rcViewport.x, m_rcViewport.y };
     // 垂直布局
     if (m_matrix.read_direction & 1) {
@@ -745,44 +741,41 @@ void RichED::CEDTextDocument::SetAnchorCaret(
 /// <param name="len">The length.</param>
 /// <returns></returns>
 void RichED::CEDTextDocument::RankUpMagic(DocPoint dp, uint32_t len) noexcept {
-    //return;
-
-    if (dp.line < m_vLogic.GetSize()) {
-        const auto data = m_vLogic[dp.line];
-        if (dp.pos < data.length) {
-            auto cell = data.first;
-            auto pos = dp.pos;
-            detail::find_cell2_txtoff_ex(cell, pos);
-            Private::Dirty(*this, *cell, dp.line);
-            assert(pos < cell->RefString().length);
-            // 单字
-            uint32_t end_pos = pos + 1;
-            // 双字
-            if (detail::is_1st_surrogate(cell->RefString().data[pos]))
-                end_pos++;
-            if (!cell->Split(end_pos)) return;
-            if (cell = cell->Split(pos)) {
-                // RANK UP!
-                const_cast<CellType&>(cell->RefMetaInfo().metatype) = Type_UnderRuby;
-                auto& str = const_cast<FixedStringA&>(cell->RefString());
-                str.capacity = str.length;
-                cell->AsDirty();
-                // 后面标记为注音
-                while (!cell->RefMetaInfo().eol) {
-                    cell = detail::next_cell(cell);
-                    if (len <= cell->RefString().length) {
-                        cell->Split(len);
-                        const_cast<CellType&>(cell->RefMetaInfo().metatype) = Type_Ruby;
-                        break;
-                    }
-                    len -= cell->RefString().length;
-                    const_cast<CellType&>(cell->RefMetaInfo().metatype) = Type_Ruby;
-                }
+    // 行检测
+    if (dp.line >= m_vLogic.GetSize()) return assert(!"OUT OF RANGE");
+    const auto data = m_vLogic[dp.line];
+    // 位检测
+    if (dp.pos >= data.length) return assert(!"OUT OF RANGE");
+    // 处理
+    auto cell = data.first;
+    auto pos = dp.pos;
+    detail::find_cell2_txtoff_ex(cell, pos);
+    Private::Dirty(*this, *cell, dp.line);
+    assert(pos < cell->RefString().length);
+    // 单字
+    uint32_t end_pos = pos + 1;
+    // 双字
+    if (detail::is_1st_surrogate(cell->RefString().data[pos]))
+        end_pos++;
+    if (!cell->Split(end_pos)) return;
+    if (cell = cell->Split(pos)) {
+        // RANK UP!
+        const_cast<CellType&>(cell->RefMetaInfo().metatype) = Type_UnderRuby;
+        auto& str = const_cast<FixedStringA&>(cell->RefString());
+        str.capacity = str.length;
+        cell->AsDirty();
+        // 后面标记为注音
+        while (!cell->RefMetaInfo().eol) {
+            cell = detail::next_cell(cell);
+            if (len <= cell->RefString().length) {
+                cell->Split(len);
+                const_cast<CellType&>(cell->RefMetaInfo().metatype) = Type_Ruby;
+                break;
             }
-            return;
+            len -= cell->RefString().length;
+            const_cast<CellType&>(cell->RefMetaInfo().metatype) = Type_Ruby;
         }
     }
-    assert(!"OUT OF RANGE");
 }
 
 /// <summary>

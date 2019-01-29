@@ -275,6 +275,7 @@ bool WinDWnD2D::Init(HWND hwnd) noexcept {
 #if 0
         this->Doc().InsertText({ 0, 0 }, u"😂😂😂😂😂"_red);
 #else
+        this->Doc().InsertText({ 0, 0 }, u"\r\n\r\nHello, World!\r\n泥壕世界!\n"_red);
         this->Doc().InsertInline({ 0, 0 }, *info.as_info(), info.create_img(L"../common/2.png"), Type_Image);
         this->Doc().InsertText({ 0, 0 }, u"国人发明的"_red);
         this->Doc().InsertRuby({ 0, 0 }, U'韩', u"宇宙"_red);

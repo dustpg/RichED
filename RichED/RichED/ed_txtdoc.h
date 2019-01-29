@@ -98,7 +98,7 @@ namespace RichED {
         // render
         void Render() noexcept;
         // add current doc view-point pos
-        void SetPosPlus(Point) noexcept;
+        void AddPos(Point) noexcept;
         // set doc view-point pos
         void SetPos(Point) noexcept;
         // resize doc view-zone
