@@ -164,7 +164,7 @@ namespace RichED { namespace detail {
         // cell node
         T*      cell;
         // operator *
-        auto&operator*() noexcept { return *cell; }
+        auto&operator*() noexcept { assert(cell && cell->next && cell->prev); return *cell; }
         // operator !=
         bool operator!=(nitr node) const noexcept { return cell != node.cell; }
         // operator ++
