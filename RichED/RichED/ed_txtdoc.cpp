@@ -2052,7 +2052,6 @@ void RichED::CEDTextDocument::Private::SetSelection(
 /// <param name="dp">The dp.</param>
 /// <param name="view">The view.</param>
 /// <param name="linedata">The linedata.</param>
-/// <param name="rich_ptr">The rich PTR.</param>
 /// <param name="behind">if set to <c>true</c> [behind].</param>
 /// <returns></returns>
 bool RichED::CEDTextDocument::Private::Insert(
@@ -2203,16 +2202,22 @@ bool RichED::CEDTextDocument::Private::Insert(
     line_ptr[0].first = static_cast<CEDTextCell*>(*pointer_to_the_first_at_line);;
     line_ptr[0].length += view1.second - view1.first;
     line_ptr[lf_count].length += view2.second - view2.first;
+    const auto old_line_ptr = line_ptr;
     cell_a->InsertText(pos, view1);
     cell_b->InsertText(0, view2);
     cell = cell_a;
 
+    // 第一行
+    //bool first_line_not_new = false;
 
-    // 中间字符
+    // 插入中间字符
     if (view.first != view.second) {
         while (true) {
+            // 获取新的一行字符数据
             auto line_view = detail::lfview(view);
-            if (line_view.first != line_view.second) do {
+            // 有效字符串 --- XA
+            if (line_view.first != line_view.second || line_ptr != old_line_ptr) do {
+                // 将有效字符串拆分成最大长度的字符串块
                 auto this_end = line_view.first + TEXT_CELL_STR_MAXLEN;
                 // 越界
                 if (this_end > line_view.second) this_end = line_view.second;
@@ -2220,7 +2225,9 @@ bool RichED::CEDTextDocument::Private::Insert(
                 if (detail::is_1st_surrogate(this_end[-1])) ++this_end;
                 // 创建CELL
                 const auto obj = RichED::CreateNormalCell(doc, riched);
+                // TODO: 强异常保证
                 if (!obj) return false;
+                // 插入数据
                 const_cast<CellMeta&>(obj->RefMetaInfo()).metatype = insert_type;
                 line_ptr->length += this_end - line_view.first;
                 obj->InsertText(0, { line_view.first, this_end });
@@ -2228,8 +2235,7 @@ bool RichED::CEDTextDocument::Private::Insert(
                 cell = obj;
                 line_view.first = this_end;
             } while (line_view.first < line_view.second);
-            // 换行
-
+            // 行数据
             line_ptr->first = static_cast<CEDTextCell*>(*pointer_to_the_first_at_line);
             pointer_to_the_first_at_line = &cell->next;
             ++line_ptr;
@@ -2242,6 +2248,7 @@ bool RichED::CEDTextDocument::Private::Insert(
             cell->AsEOL();
         }
     }
+
     //doc.m_vLogic;
     return true;
 }

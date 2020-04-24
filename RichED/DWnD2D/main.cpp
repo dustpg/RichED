@@ -70,6 +70,7 @@ struct DWnD2DDataField {
     // D2D
     ID2D1Factory*           d2d_factory;
     ID2D1SolidColorBrush*   d2d_black;
+    ID2D1SolidColorBrush*   d2d_border;
     ID2D1SolidColorBrush*   d2d_brush;
     ID2D1SolidColorBrush*   d2d_cell1;
     ID2D1SolidColorBrush*   d2d_cell2;
@@ -80,7 +81,7 @@ constexpr char16_t IME_BUF_LEN = 68;
 
 struct WinDWnD2D final : IEDTextPlatform {
     // ctor
-    WinDWnD2D() noexcept {}
+    WinDWnD2D() noexcept { ::memset(&this->data, 0, sizeof(this->data)); }
     // on out of memory, won't be called on ctor
     auto OnOOM(uint32_t retry_count) noexcept->HandleOOM override { std::exit(ECODE_OOM); return OOM_NoReturn; }
     // is valid password
@@ -359,6 +360,12 @@ bool WinDWnD2D::Init(HWND hwnd) noexcept {
     }
     if (SUCCEEDED(hr)) {
         hr = d.d2d_rendertarget->CreateSolidColorBrush(
+            D2D1::ColorF(D2D1::ColorF::Black, 0.3f),
+            &d.d2d_border
+        );
+    }
+    if (SUCCEEDED(hr)) {
+        hr = d.d2d_rendertarget->CreateSolidColorBrush(
             D2D1::ColorF(D2D1::ColorF::Green, 0.25f),
             &d.d2d_cell1
         );
@@ -378,6 +385,7 @@ void WinDWnD2D::Clear() noexcept {
     ::SafeRelease(this->data.dw1_deffont);
     ::SafeRelease(this->data.dw1_factory);
     ::SafeRelease(this->data.d2d_black);
+    ::SafeRelease(this->data.d2d_border);
     ::SafeRelease(this->data.d2d_brush);
     ::SafeRelease(this->data.d2d_cell1);
     ::SafeRelease(this->data.d2d_cell2);
@@ -1029,12 +1037,11 @@ void WinDWnD2D::Render() noexcept {
     this->cell_draw_i = 0;
 
     const auto renderer = this->data.d2d_rendertarget;
-    const auto brush = this->data.d2d_black;
     if (renderer->CheckWindowState() & D2D1_WINDOW_STATE_OCCLUDED) return;
     renderer->BeginDraw();
     renderer->Clear(D2D1::ColorF(0x66ccff));
     renderer->SetTransform(D2D1::Matrix3x2F::Translation(CTRL_X, CTRL_Y));
-    renderer->DrawRectangle({0, 0, ctrl_w, ctrl_h }, brush);
+    renderer->DrawRectangle({0, 0, ctrl_w, ctrl_h }, this->data.d2d_border);
 
     this->DrawSelection();
     this->Doc().Render();
