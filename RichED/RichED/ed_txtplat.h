@@ -34,11 +34,11 @@ namespace RichED {
     // text platform
     struct PCN_NOVTABLE IEDTextPlatform {
         // on out of memory, won't be called on ctor
-        virtual auto OnOOM(uint32_t retry_count) noexcept ->HandleOOM = 0;
+        virtual auto OnOOM(uint32_t retry_count, size_t try_alloc) noexcept ->HandleOOM = 0;
         // is valid password
         virtual bool IsValidPassword(char32_t) noexcept = 0;
         // append text
-        virtual void AppendText(CtxPtr ctx, U16View view) noexcept = 0;
+        virtual bool AppendText(CtxPtr ctx, U16View view) noexcept = 0;
         // write to file
         virtual bool WriteToFile(CtxPtr, const uint8_t data[], uint32_t len) noexcept = 0;
         // read from file
@@ -48,7 +48,7 @@ namespace RichED {
         // delete context
         virtual void DeleteContext(CEDTextCell&) noexcept = 0;
         // draw context
-        virtual void DrawContext(CEDTextCell&, unit_t baseline) noexcept = 0;
+        virtual void DrawContext(CtxPtr,CEDTextCell&, unit_t baseline) noexcept = 0;
         // hit test
         virtual auto HitTest(CEDTextCell&, unit_t offset) noexcept->CellHitTest = 0;
         // get char metrics

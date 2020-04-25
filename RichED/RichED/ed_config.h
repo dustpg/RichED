@@ -6,6 +6,8 @@
 #define RED_LUT_ALIGNED alignas(64)
 #define RED_RICHED_ALIGNED alignas(8)
 
+#ifndef PCN_NOINLINE
+
 #ifndef PCN_NOVTABLE
 #ifdef _MSC_VER
 #define PCN_NOVTABLE _declspec(novtable)
@@ -20,6 +22,8 @@
 #else
 #define PCN_NOINLINE
 #endif
+#endif
+
 #endif
 
 //#define RED_UNDOREDO

@@ -83,14 +83,15 @@ struct WinDWnD2D final : IEDTextPlatform {
     // ctor
     WinDWnD2D() noexcept { ::memset(&this->data, 0, sizeof(this->data)); }
     // on out of memory, won't be called on ctor
-    auto OnOOM(uint32_t retry_count) noexcept->HandleOOM override { std::exit(ECODE_OOM); return OOM_NoReturn; }
+    auto OnOOM(uint32_t retry_count, size_t) noexcept->HandleOOM override { std::exit(ECODE_OOM); return OOM_NoReturn; }
     // is valid password
     bool IsValidPassword(char32_t ch) noexcept override { return ch < 128; }
     // append text
-    void AppendText(CtxPtr ctx, U16View view) noexcept override {
+    bool AppendText(CtxPtr ctx, U16View view) noexcept override {
         auto& obj = *reinterpret_cast<std::u16string*>(ctx);
-        try { obj.append(view.first, view.second); }
+        try { obj.append(view.first, view.second); return true; }
         catch (...) {}
+        return false;
     }
     // write to file
     bool WriteToFile(CtxPtr ctx, const uint8_t data[], uint32_t len) noexcept override {
@@ -107,7 +108,7 @@ struct WinDWnD2D final : IEDTextPlatform {
     // delete context
     void DeleteContext(CEDTextCell&) noexcept override;
     // draw context
-    void DrawContext(CEDTextCell&, unit_t y) noexcept override;
+    void DrawContext(CtxPtr,CEDTextCell&, unit_t y) noexcept override;
     // map! 
     void Map(float[2]) noexcept;
     // map! 
@@ -142,6 +143,8 @@ struct WinDWnD2D final : IEDTextPlatform {
     void Update() noexcept;
 
     void DrawSelection() noexcept;
+    // set ime pose
+    void SetImePosition() noexcept;
 
 
     uint32_t        cell_draw_i     = 0;
@@ -273,7 +276,7 @@ bool WinDWnD2D::Init(HWND hwnd) noexcept {
     // 初文字
     if (SUCCEEDED(hr)) {
         DWnD2DImageExtraInfo info;
-#if 0
+#if 1
         this->Doc().InsertText({ 0, 0 }, u"😂😂😂😂😂"_red);
 #else
         this->Doc().InsertText({ 0, 0 }, u"\r\n\r\nHello, World!\r\n泥壕世界!\n"_red);
@@ -629,12 +632,60 @@ LRESULT WinDWnD2D::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
         handled = true;
         result = 1;
         break;
+        // IME 支持
+    //case WM_IME_STARTCOMPOSITION:
+    case WM_IME_COMPOSITION:
+        //handled = true;
+        g_platform.SetImePosition();
+        break;
     }
 
     if (!handled) result = ::DefWindowProcW(hwnd, message, wParam, lParam);
     return result;
 }
 
+
+/// <summary>
+/// Sets the IME position.
+/// </summary>
+/// <returns></returns>
+void WinDWnD2D::SetImePosition() noexcept {
+    auto caret = this->Doc().GetCaret();
+#ifndef NDEBUG
+    char buf[256]; buf[0] = 0;
+    std::snprintf(
+        buf, sizeof(buf) / sizeof(buf[0]), 
+        "caret[%f, %f]",
+        caret.x, caret.y
+    );
+    //this->DebugOutput(buf);
+#endif // NDEBUG
+    // 判断有效性
+    if (caret.x >= 0.0 && caret.y >= 0.0 && caret.x < ctrl_w && caret.y < ctrl_h) {
+        BOOL ret = FALSE;
+        HIMC imc = ::ImmGetContext(this->data.hwnd);
+        // 0.8 保持一定美观
+        const float RA = 0.8f;
+        caret.y += caret.height * (1.f - RA) * 0.5f;
+        caret.height *= RA;
+
+        if (::ImmGetOpenStatus(imc)) {
+            COMPOSITIONFORM cf = { 0 };
+            cf.dwStyle = CFS_POINT;
+            cf.ptCurrentPos.x = static_cast<LONG>(CTRL_X + caret.x);
+            cf.ptCurrentPos.y = static_cast<LONG>(CTRL_Y + caret.y);
+            if (ImmSetCompositionWindow(imc, &cf)) {
+                LOGFONTW lf = { 0 };
+                lf.lfHeight = static_cast<LONG>(caret.height);
+                //lf.lfItalic
+                if (ImmSetCompositionFontW(imc, &lf)) {
+                    ret = TRUE;
+                }
+            }
+        }
+        ::ImmReleaseContext(this->data.hwnd, imc);
+    }
+}
 
 
 /// <summary>
@@ -804,7 +855,7 @@ void WinDWnD2D::DeleteContext(CEDTextCell& cell) noexcept {
 /// <param name="cell">The cell.</param>
 /// <param name="baseline">The baseline.</param>
 /// <returns></returns>
-void WinDWnD2D::DrawContext(CEDTextCell& cell, unit_t baseline) noexcept {
+void WinDWnD2D::DrawContext(CtxPtr ctx, CEDTextCell& cell, unit_t baseline) noexcept {
     // 睡眠状态则唤醒
     if (!cell.ctx.context) this->RecreateContext(cell);
     // 图片
@@ -1044,7 +1095,7 @@ void WinDWnD2D::Render() noexcept {
     renderer->DrawRectangle({0, 0, ctrl_w, ctrl_h }, this->data.d2d_border);
 
     this->DrawSelection();
-    this->Doc().Render();
+    this->Doc().Render(nullptr);
     if (this->caret_blink_i) {
         const auto caret = this->Doc().GetCaret();
         // GetCaret返回的矩形宽度没有意义, 可以进行自定义

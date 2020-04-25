@@ -96,7 +96,7 @@ namespace RichED {
         // update
         auto Update() noexcept->ValuedChanged;
         // render
-        void Render() noexcept;
+        void Render(CtxPtr) noexcept;
         // add current doc view-point pos
         void AddPos(Point) noexcept;
         // set doc view-point pos

@@ -127,7 +127,7 @@ namespace RichED { namespace detail {
     bool resize_buffer(CEDBuffer<T>& buf, IEDTextPlatform& plat, uint32_t len) noexcept {
         for (uint32_t i = 0; ; ++i) {
             if (buf.Resize(len)) return true;
-            if (plat.OnOOM(i) == OOM_Ignore) return false;
+            if (plat.OnOOM(i, len) == OOM_Ignore) return false;
         }
     }
     // is cjk
@@ -574,7 +574,7 @@ auto RichED::CEDTextDocument::Update() noexcept -> ValuedChanged {
 /// Renders this instance.
 /// </summary>
 /// <returns></returns>
-void RichED::CEDTextDocument::Render() noexcept {
+void RichED::CEDTextDocument::Render(CtxPtr ctx) noexcept {
     const auto count = m_vVisual.GetSize();
     if (!count) return;
 
@@ -588,7 +588,7 @@ void RichED::CEDTextDocument::Render() noexcept {
         const auto baseline = this_line->offset + this_line->ar_height_max;
         // TODO: 固定行高
         for (auto& cell : cells) {
-            this->platform.DrawContext(cell, baseline);
+            this->platform.DrawContext(ctx, cell, baseline);
         }
         this_line = next_line;
     }
@@ -978,6 +978,7 @@ void RichED::CEDTextDocument::Private::GenText(
 void RichED::CEDTextDocument::GenText(CtxPtr ctx, DocPoint begin, DocPoint end) noexcept {
     auto& plat = this->platform;
     const auto lf = m_linefeed.View();
+    // XXX: AppendText OOM处理
     const auto append_text = [&plat, ctx](U16View view) noexcept {
         plat.AppendText(ctx, view);
     };

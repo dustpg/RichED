@@ -300,7 +300,7 @@ namespace RichED {
                 assert((uintptr_t(ptr) & (alignof(CEDTextCellPublic) - 1)) == 0);
                 return new(ptr) CEDTextCellPublic{ doc, red, capacity };
             }
-            if (plat.OnOOM(i) == OOM_Ignore) return nullptr;
+            if (plat.OnOOM(i, len) == OOM_Ignore) return nullptr;
         }
     }
     /// <summary>
