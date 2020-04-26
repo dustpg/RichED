@@ -14,7 +14,9 @@ enum { WINDOW_WIDTH = 1280, WINDOW_HEIGHT = 720 };
 static const wchar_t WINDOW_TITLE[] = L"RichED - DWnD2D";
 enum { ECODE_FAILED = -1, ECODE_OOM = -2, ECODE_DRAW = -3, ECODE_RESIZE = -4 };
 
-enum { DEF_FONT_SIZE = 42, UPDATE_DELTA_TIME = 20 };
+enum { DEF_FONT_SIZE = 42, UPDATE_DELTA_TIME = 40 };
+
+enum : uint32_t { PASSWORD_CHAR = U'😂' };
 
 enum { CTRL_X = 100, CTRL_Y = 100,  };
 
@@ -85,7 +87,10 @@ struct WinDWnD2D final : IEDTextPlatform {
     // on out of memory, won't be called on ctor
     auto OnOOM(uint32_t retry_count, size_t) noexcept->HandleOOM override { std::exit(ECODE_OOM); return OOM_NoReturn; }
     // is valid password
-    bool IsValidPassword(char32_t ch) noexcept override { return ch < 128; }
+    bool IsValidPassword(char32_t ch) noexcept override { 
+        return true;
+        //return ch >= 0x20 && ch < 0x7f;
+    }
     // append text
     bool AppendText(CtxPtr ctx, U16View view) noexcept override {
         auto& obj = *reinterpret_cast<std::u16string*>(ctx);
@@ -125,7 +130,7 @@ struct WinDWnD2D final : IEDTextPlatform {
     auto GetCharMetricsImage(CEDTextCell&, uint32_t offset) noexcept->CharMetrics ;
 #ifndef NDEBUG
     // debug output
-    void DebugOutput(const char*) noexcept override;
+    void DebugOutput(const char*, bool high) noexcept override;
 #endif
 
 
@@ -265,7 +270,9 @@ bool WinDWnD2D::Init(HWND hwnd) noexcept {
         DocInitArg arg = {
             0, Direction_L2R, Direction_T2B,
             //0, Direction_T2B, Direction_R2L,
-            Flag_RichText | Flag_MultiLine, '*', 0xffffff, 0,
+            Flag_RichText | Flag_MultiLine,
+            //Flag_UsePassword | Flag_MultiLine,
+            PASSWORD_CHAR, 0xffffff, 0,
             VAlign_Baseline, Mode_SpaceOrCJK,
             { DEF_FONT_SIZE, 0, 0, Effect_None } 
         };
@@ -276,8 +283,8 @@ bool WinDWnD2D::Init(HWND hwnd) noexcept {
     // 初文字
     if (SUCCEEDED(hr)) {
         DWnD2DImageExtraInfo info;
-#if 1
-        this->Doc().InsertText({ 0, 0 }, u"😂😂😂😂😂"_red);
+#if 0
+        //this->Doc().InsertText({ 0, 0 }, u"😂😂😂😂😂"_red);
 #else
         this->Doc().InsertText({ 0, 0 }, u"\r\n\r\nHello, World!\r\n泥壕世界!\n"_red);
         this->Doc().InsertInline({ 0, 0 }, *info.as_info(), info.create_img(L"../common/2.png"), Type_Image);
@@ -502,7 +509,8 @@ LRESULT WinDWnD2D::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
                 break;
             }
             // 有效字符:  \b 之类的控制符不算
-            if (ch >= 0x20 || ch == '\t') g_platform.Doc().GuiChar(ch);
+            if ((ch >= 0x20 && ch != 0x7f) || ch == '\t')
+                g_platform.Doc().GuiChar(ch);
         }
         break;
     case WM_KEYDOWN:
@@ -749,11 +757,20 @@ void WinDWnD2D::RecreateContext(CEDTextCell& cell) noexcept {
         return this->data.dw1_deffont;
     }();
     // 创建新的布局
-    static_assert(sizeof(wchar_t) == sizeof(str.data[0]), "must be same!");
-    auto hr = this->data.dw1_factory->CreateTextLayout(
-        reinterpret_cast<const wchar_t*>(str.data), str.length,
-        fmt, 0, 0, reinterpret_cast<IDWriteTextLayout**>(&cell.ctx.context)
-    );
+    HRESULT hr = S_OK; 
+    const auto cell_context = reinterpret_cast<IDWriteTextLayout**>(&cell.ctx.context);
+    this->Doc().PWHelperView([=, &hr](RichED::U16View view) noexcept {
+        static_assert(sizeof(wchar_t) == sizeof(view.first[0]), "must be same!");
+        hr = this->data.dw1_factory->CreateTextLayout(
+            reinterpret_cast<const wchar_t*>(view.first), view.second- view.first,
+            fmt, 0, 0, cell_context
+        );
+    }, cell);
+    //static_assert(sizeof(wchar_t) == sizeof(str.data[0]), "must be same!");
+    //auto hr = this->data.dw1_factory->CreateTextLayout(
+    //    reinterpret_cast<const wchar_t*>(str.data), str.length,
+    //    fmt, 0, 0, reinterpret_cast<IDWriteTextLayout**>(&cell.ctx.context)
+    //);
     // 测量CELL
     if (cell.RefMetaInfo().dirty) {
         const auto layout = reinterpret_cast<IDWriteTextLayout*>(cell.ctx.context);
@@ -867,9 +884,10 @@ void WinDWnD2D::DrawContext(CtxPtr ctx, CEDTextCell& cell, unit_t baseline) noex
     if (const auto ptr = static_cast<IDWriteTextLayout*>(cell.ctx.context)) {
         const auto brush = this->data.d2d_brush;
         // 富文本
-        if (this->Doc().RefInfo().flags & Flag_RichText) {
+        if (this->Doc().RefInfo().flags & Flag_RichText) 
             brush->SetColor(D2D1::ColorF(cell.RefRichED().color));
-        }
+        else 
+            brush->SetColor(D2D1::ColorF(D2D1::ColorF::Black));
         // 渲染CELL
         point.y = baseline - cell.metrics.ar_height + cell.metrics.offset.y;
         const auto renderer = this->data.d2d_rendertarget;
@@ -952,6 +970,7 @@ auto WinDWnD2D::HitTest(CEDTextCell& cell, unit_t offset) noexcept->CellHitTest 
         rv.pos = htm.textPosition;
         rv.trailing = hint;
         rv.length = htm.length;
+        this->Doc().PWHelperHit(cell, rv);
     }
     return rv;
 }
@@ -989,12 +1008,15 @@ auto WinDWnD2D::GetCharMetrics(CEDTextCell& cell, uint32_t pos) noexcept -> Char
     if (!cell.ctx.context) this->RecreateContext(cell);
     // 失败则不获取
     if (const auto ptr = static_cast<IDWriteTextLayout*>(cell.ctx.context)) {
+        assert(pos <= cell.RefString().length);
         if (pos == cell.RefString().length) {
             cm.offset = cell.metrics.width;
         }
         else try {
+            // 密码模式
+            const auto real_pos = this->Doc().PWHelperPos(cell, pos);
             std::vector<DWRITE_CLUSTER_METRICS> buf;
-            const uint32_t size = pos + 1;
+            const uint32_t size = real_pos + 1;
             buf.resize(size);
             uint32_t max_count = 0;
             ptr->GetClusterMetrics(buf.data(), size, &max_count);
@@ -1008,7 +1030,7 @@ auto WinDWnD2D::GetCharMetrics(CEDTextCell& cell, uint32_t pos) noexcept -> Char
                 const auto&x = data_ptr[i];
                 width += last_width = x.width;
                 // 防止万一用>=
-                if (char_index >= pos) break;
+                if (char_index >= real_pos) break;
                 char_index += x.length;
             }
             // 写回返回值
@@ -1026,8 +1048,8 @@ auto WinDWnD2D::GetCharMetrics(CEDTextCell& cell, uint32_t pos) noexcept -> Char
 /// </summary>
 /// <param name="text">The text.</param>
 /// <returns></returns>
-void WinDWnD2D::DebugOutput(const char* text) noexcept {
-    std::printf("[RichED Debug] %s\n", text);
+void WinDWnD2D::DebugOutput(const char* text, bool high) noexcept {
+    std::printf("[RichED %s] %s\n", high ? "Error" : " Hint", text);
 }
 
 #endif
@@ -1076,7 +1098,13 @@ void WinDWnD2D::Update() noexcept {
         this->caret_blink_i = 1;
         ::InvalidateRect(this->data.hwnd, nullptr, false);
     }
-
+    // Text
+    if (flag & Changed_Text) {
+        //std::wstring str;
+        //g_platform.Doc().GenText(&str, {}, { g_platform.Doc().GetLogicLineCount() });
+        //str.append(L"\r\n");
+        //::OutputDebugStringW(str.c_str());
+    }
 }
 
 /// <summary>

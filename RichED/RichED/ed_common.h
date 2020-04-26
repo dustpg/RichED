@@ -311,11 +311,10 @@ namespace RichED {
         // display line-num end
         uint32_t        display_line_end;
 
-
         // flags
         DocFlag         flags;
-        // password char
-        char32_t        password;
+        // password char [char16 x 2]
+        char32_t        password_cha16x2;
         // max char count
         uint32_t        max_char;
         // fixed lineheight

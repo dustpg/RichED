@@ -55,7 +55,7 @@ namespace RichED { namespace detail {
             c++;
             view.first++;
         }
-        return 0;
+        return c;
     }
     // lf count 
     static DocPoint lfcount(U16View view) noexcept {
@@ -487,6 +487,18 @@ bool RichED::CEDTextDocument::Private::IsRecord(
 /// <param name="arg">The argument.</param>
 RichED::CEDTextDocument::CEDTextDocument(IEDTextPlatform& plat, const DocInitArg& arg) noexcept
 : platform(plat) {
+    // 计算
+    auto cal_password = [](char32_t ch) noexcept {
+        union { char32_t u32; char16_t u16[2]; };
+        // utf32 -> utf16
+        if (ch > 0xFFFF) {
+            // From http://unicode.org/faq/utf_bom.html#35
+            u16[0] = static_cast<char16_t>(0xD800 + (ch >> 10) - (0x10000 >> 10));
+            u16[1] = static_cast<char16_t>(0xDC00 + (ch & 0x3FF));
+        }
+        else u16[0] = u16[1] = static_cast<char16_t>(ch);
+        return u32;
+    };
     // 初始化
     this->default_riched = arg.riched;
     RichED::InitMatrix(m_matrix, arg.read, arg.flow);
@@ -508,14 +520,20 @@ RichED::CEDTextDocument::CEDTextDocument(IEDTextPlatform& plat, const DocInitArg
     // 初始化INFO
     std::memset(&m_info, 0, sizeof(m_info));
     m_info.flags            = arg.flags;
-    m_info.password         = arg.password;
+    m_info.password_cha16x2 = cal_password(arg.password);
     m_info.fixed_lineheight = arg.fixed_lineheight;
     m_info.valign           = arg.valign;
     //m_info.talign           = arg.talign;
     m_info.wrap_mode        = arg.wrap_mode;
+    m_bPassword4 = arg.password > 0xFFFF;
 #ifndef NDEBUG
     // 防止越界用调试缓存
     std::memset(m_dbgBuffer, 233, sizeof(m_dbgBuffer));
+    // FLAG检查
+    if (arg.flags & Flag_UsePassword) {
+        //assert(!(arg.flags & Flag_MultiLine) && "multiline password?");
+        assert(!(arg.flags & Flag_RichText) && "rich password?");
+    }
 #endif
     // 初始CELL
     const auto cell = RichED::CreateNormalCell(*this, arg.riched);
@@ -564,7 +582,7 @@ auto RichED::CEDTextDocument::Update() noexcept -> ValuedChanged {
         const auto maxbtm = max_unit();
         Private::ExpandVL(*this, uint32_t(-1), bottom);
 #ifndef NDEBUG
-        this->platform.DebugOutput("<BeforeRender>");
+        this->platform.DebugOutput("<BeforeRender>", false);
 #endif // !NDEBUG
     }
     return static_cast<ValuedChanged>(rv);
@@ -1135,8 +1153,9 @@ bool RichED::CEDTextDocument::GuiLButtonHold(Point pt) noexcept {
 /// <returns></returns>
 bool RichED::CEDTextDocument::GuiChar(char32_t ch) noexcept {
 #ifndef NDEBUG
-    if (!(ch >= 0x20 || ch == '\t')) {
-        this->platform.DebugOutput("<CEDTextDocument::GuiChar>: control char NOT accepted.");
+    if (!((ch >= 0x20 && ch != 0x7f) || ch == '\t')) {
+        const auto msg = "<CEDTextDocument::GuiChar>: control char NOT accepted.";
+        this->platform.DebugOutput(msg, true);
     }
 #endif
     char16_t buf[2];
@@ -1156,14 +1175,129 @@ bool RichED::CEDTextDocument::GuiText(U16View view) noexcept {
     if (m_info.flags & Flag_GuiReadOnly) return false;
     // 没有头发
     if (view.second == view.first) return false;
+    // 记录下来
     detail::op_recorder recorder{ *this };
     // 删除选择区
     Private::DeleteSelection(*this);
-    // 插入
-    const auto target = this->InsertText(m_dpCaret, view, true);
-    // 设置选择
-    Private::SetSelection(*this, nullptr, target, impl::mode_target, false);
-    return true;
+    // 输入密码
+    if (m_info.flags & Flag_UsePassword) {
+        return this->gui_password(view);
+    }
+    // 正常插入
+    else {
+        const auto target = this->InsertText(m_dpCaret, view, true);
+        // 设置选择
+        Private::SetSelection(*this, nullptr, target, impl::mode_target, false);
+        return true;
+    }
+}
+
+
+/// <summary>
+/// GUIs the password.
+/// </summary>
+/// <param name="view">The view.</param>
+/// <returns></returns>
+bool RichED::CEDTextDocument::gui_password(U16View view) noexcept {
+    char32_t pwbuf32[PASSWORD_INPUT_BUFFER];
+    auto caret_target = m_dpCaret;
+    // 插入当前缓冲数据
+    const auto buf_insert = [&pwbuf32, &caret_target, this](const uint32_t count) noexcept {
+        char16_t pwbuf16[PASSWORD_INPUT_BUFFER * 2];
+        auto itr = pwbuf16;
+        for (uint32_t i = 0; i != count; ++i)
+            itr += detail::utf32to16(pwbuf32[i], itr);
+        caret_target = this->InsertText(caret_target, { pwbuf16 , itr }, true);
+    };
+    uint32_t char_count = 0, char_total = 0;
+    // 便利字符串
+    while (view.first < view.second) {
+        char32_t ch = *view.first;
+        // 将U16转换成U32
+        if (detail::is_1st_surrogate(*view.first)) {
+            ch = detail::char16x2to32(view.first[0], view.first[1]);
+            ++view.first;
+            assert(detail::is_2nd_surrogate(*view.first));
+            assert(view.first < view.second);
+        }
+        // 再判断合法性
+        if (platform.IsValidPassword(ch)) {
+            pwbuf32[char_count++] = ch;
+            // 缓冲满了则插入
+            if (char_count == PASSWORD_INPUT_BUFFER) {
+                char_total += char_count;
+                buf_insert(char_count);
+                char_count = 0;
+            }
+        }
+        ++view.first;
+    }
+    char_total += char_count;
+    // 输入无效密码
+    if (char_total) {
+        if (char_count) buf_insert(char_count);
+        Private::SetSelection(*this, nullptr, caret_target, impl::mode_target, false);
+        return true;
+    }
+    return false;
+}
+
+
+//PCN_NOINLINE
+/// <summary>
+/// Recreates the context.
+/// </summary>
+/// <param name="cell">The cell.</param>
+/// <returns></returns>
+void RichED::CEDTextDocument::recreate_context(CEDTextCell& cell) noexcept {
+#if 0
+    U16View view;
+    view.first = cell.RefString().data;
+    view.second = view.first + cell.RefString().length;
+    // 密码模式
+    if (m_info.flags & Flag_UsePassword) {
+
+    }
+    this->platform.RecreateContext(cell, view);
+#else
+    this->platform.RecreateContext(cell);
+#endif
+}
+
+/// <summary>
+/// Gets the view.
+/// </summary>
+/// <param name="cell">The cell.</param>
+/// <returns></returns>
+auto RichED::CEDTextDocument::get_view(const CEDTextCell & cell) noexcept -> U16View {
+    U16View view;
+    view.first = cell.RefString().data;
+    view.second = view.first + cell.RefString().length;
+    return view;
+}
+
+/// <summary>
+/// Passwords the helper16.
+/// </summary>
+/// <param name="buf">The buf.</param>
+/// <param name="ch">The ch.</param>
+/// <param name="cell">The cell.</param>
+/// <returns></returns>
+auto RichED::CEDTextDocument::password_helper16(
+    char32_t buf[], char32_t ch16x2, bool mode, const CEDTextCell & cell) noexcept -> U16View {
+    U16View view; view.first = reinterpret_cast<char16_t*>(buf);
+    const auto& str = cell.RefString();
+    // XXX: 不用每次计算?
+    uint32_t fill_count = detail::count({ str.data, str.data + str.length });
+    // utf32 -> utf16
+    if (mode) view.second = view.first + fill_count * 2;
+    else {
+        view.second = view.first + fill_count;
+        fill_count = (fill_count + 1) / 2;
+    }
+    // 填写
+    std::fill_n(reinterpret_cast<char32_t*>(buf), fill_count, ch16x2);
+    return view;
 }
 
 /// <summary>
@@ -1539,13 +1673,13 @@ bool RichED::CEDTextDocument::set_riched(
         // 增量布局
         else {
             if (cell1 != b) {
-                this->platform.RecreateContext(*cell1);
+                this->recreate_context(*cell1);
                 b->metrics.pos = cell1->metrics.pos + cell1->metrics.width;
             }
             if (cell2 != e) {
                 // 可能cell1 == cell2
                 const auto current = static_cast<CEDTextCell*>(e->prev);
-                this->platform.RecreateContext(*current);
+                this->recreate_context(*current);
                 e->metrics.pos = current->metrics.pos + current->metrics.width;
             }
         }
@@ -1639,13 +1773,13 @@ bool RichED::CEDTextDocument::set_flags(
         // 增量布局
         else {
             if (cell1 != b) {
-                this->platform.RecreateContext(*cell1);
+                this->recreate_context(*cell1);
                 b->metrics.pos = cell1->metrics.pos + cell1->metrics.width;
             }
             if (cell2 != e) {
                 // 可能cell1 == cell2
                 const auto current = static_cast<CEDTextCell*>(e->prev);
-                this->platform.RecreateContext(*current);
+                this->recreate_context(*current);
                 e->metrics.pos = current->metrics.pos + current->metrics.width;
             }
         }
@@ -1690,7 +1824,7 @@ void RichED::CEDTextDocument::Private::ExpandVL(
     if (line.offset >= bottom) return;
 
 #ifndef NDEBUG
-    doc.platform.DebugOutput("<ExpandVL>");
+    doc.platform.DebugOutput("<ExpandVL>", false);
 #endif // !NDEBUG
 
 
@@ -1751,7 +1885,7 @@ void RichED::CEDTextDocument::Private::ExpandVL(
                 new_line = true;
                 this_eol = cell->RefMetaInfo().eol;
                 // 重建脏CELL
-                if (cell->RefMetaInfo().dirty) doc.platform.RecreateContext(*cell);
+                if (cell->RefMetaInfo().dirty) doc.recreate_context(*cell);
             }
         }
 
@@ -1823,13 +1957,13 @@ void RichED::CEDTextDocument::Private::Recreate(
         unit_t width = 0;
         {
             cell.AsDirty();
-            doc.platform.RecreateContext(cell);
+            doc.recreate_context(cell);
             auto node = detail::next_cell(&cell);
             // 没有注音
             if (node == end_cell) return;
             while (node != end_cell) {
                 node->AsDirty();
-                doc.platform.RecreateContext(*node);
+                doc.recreate_context(*node);
                 width += node->metrics.width;
                 node = detail::next_cell(node);
             }
@@ -1855,7 +1989,7 @@ void RichED::CEDTextDocument::Private::Recreate(
         }
     }
     // 普通CELL
-    else if (cell.RefMetaInfo().dirty) doc.platform.RecreateContext(cell);
+    else if (cell.RefMetaInfo().dirty) doc.recreate_context(cell);
 }
 
 /// <summary>
@@ -2040,7 +2174,7 @@ void RichED::CEDTextDocument::Private::SetSelection(
             doc.m_dpCaret.line, doc.m_dpCaret.pos,
             doc.m_dpAnchor.line, doc.m_dpAnchor.pos
         );
-        doc.platform.DebugOutput(buf);
+        doc.platform.DebugOutput(buf, false);
 #endif // !NDEBUG
     }
 }
@@ -3190,6 +3324,103 @@ auto RichED::CEDTextDocument::Private::WordRight(
 }
 
 
+/// <summary>
+/// Pws the helper position.
+/// </summary>
+/// <param name="cell">The cell.</param>
+/// <param name="pos">The position.</param>
+/// <returns></returns>
+auto RichED::CEDTextDocument::PWHelperPos(const CEDTextCell& cell, const uint32_t pos) noexcept -> uint32_t{
+    // 密码模式
+    if (m_info.flags & Flag_UsePassword) {
+        // 因为密码不会很长, 使用O(n)方式遍历字符串
+        auto& string = cell.RefString();
+        assert(pos < string.length && "Out of Range");
+        uint32_t count = 0;
+        for (uint32_t i = 0; i < pos; ++i) {
+            if (detail::is_1st_surrogate(string.data[i])) ++i;
+            ++count;
+        }
+        if (m_bPassword4) count *= 2;
+        return count;
+    }
+    return pos;
+}
+
+/// <summary>
+/// Pws the length of the helper.
+/// </summary>
+/// <param name="cell">The cell.</param>
+/// <param name="hit">The hit.</param>
+/// <returns></returns>
+void RichED::CEDTextDocument::PWHelperHit(const CEDTextCell& cell, CellHitTest& hit) noexcept {
+    // 密码模式
+    if (m_info.flags & Flag_UsePassword) {
+        const uint32_t count_mode = m_bPassword4 ? hit.pos / 2 : hit.pos;
+        // 因为密码不会很长, 使用O(n)方式遍历字符串
+        auto& string = cell.RefString();
+        uint32_t count = 0; uint32_t length = 1;
+        for (uint32_t i = 0; i != count_mode; ++i) {
+            length = 1;
+            if (detail::is_1st_surrogate(string.data[i])) length = 2;
+            count += length;
+        }
+        assert(count < string.length && "Out of Range");
+        // 写回去
+        hit.pos = count;
+        hit.length = length;
+    }
+}
+
+
+#if 0
+/// <summary>
+/// Pws the helper hit.
+/// </summary>
+/// <param name="cell">The cell.</param>
+/// <param name="pos">The position.</param>
+/// <returns></returns>
+auto RichED::CEDTextDocument::PWHelperLen(const CEDTextCell& cell, const uint32_t pos) noexcept -> uint32_t {
+    // 密码模式
+    if (m_info.flags & Flag_UsePassword) {
+        const uint32_t count_mode = m_bPassword4 ? pos / 2 : pos;
+        // 因为密码不会很长, 使用O(n)方式遍历字符串
+        auto& string = cell.RefString();
+        uint32_t count = 0;
+        for (uint32_t i = 0; i != count_mode; ++i) {
+            if (detail::is_1st_surrogate(string.data[i])) ++count;
+            ++count;
+        }
+        assert(count < string.length && "Out of Range");
+        return count;
+    }
+    return pos;
+}
+
+
+/// <summary>
+/// Pws the helper count.
+/// </summary>
+/// <param name="cell">The cell.</param>
+/// <param name="pos">The position.</param>
+/// <returns></returns>
+auto RichED::CEDTextDocument::PWHelperCnt(const CEDTextCell & cell, const uint32_t pos) noexcept -> uint32_t {
+    // 密码模式
+    if (m_info.flags & Flag_UsePassword) {
+        // 因为密码不会很长, 使用O(n)方式遍历字符串
+        auto& string = cell.RefString();
+        uint32_t count = 0;
+        for (uint32_t i = 0; i != pos; ++i) {
+            if (detail::is_1st_surrogate(string.data[i])) ++count;
+            ++count;
+        }
+        assert(count < string.length && "Out of Range");
+        return count;
+    }
+    return pos;
+}
+#endif
+
 
 // ----------------------------------------------------------------------------
 //                               DocMatrix
@@ -3252,3 +3483,4 @@ namespace RichED {
         matrix.down_mapper  = impl::mode_logicdown;
     }
 }
+
