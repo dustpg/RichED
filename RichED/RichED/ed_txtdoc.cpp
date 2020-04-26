@@ -519,6 +519,7 @@ RichED::CEDTextDocument::CEDTextDocument(IEDTextPlatform& plat, const DocInitArg
     m_tail.next = nullptr;
     // 初始化INFO
     std::memset(&m_info, 0, sizeof(m_info));
+    m_info.length_max       = arg.length_max;
     m_info.flags            = arg.flags;
     m_info.password_cha16x2 = cal_password(arg.password);
     m_info.fixed_lineheight = arg.fixed_lineheight;
@@ -1173,6 +1174,16 @@ bool RichED::CEDTextDocument::GuiText(U16View view) noexcept {
     assert(view.second >= view.first);
     // 只读
     if (m_info.flags & Flag_GuiReadOnly) return false;
+    // 超过指定长度
+    const uint32_t view_len = view.second - view.first;
+    if (view_len + m_info.total_length > m_info.length_max) {
+        view.second = view.first;
+        if (m_info.length_max > m_info.total_length) {
+            view.second += m_info.length_max - m_info.total_length;
+            if (detail::is_2nd_surrogate(*view.second)) 
+                --view.second;
+        }
+    }
     // 没有头发
     if (view.second == view.first) return false;
     // 记录下来
@@ -2193,6 +2204,15 @@ bool RichED::CEDTextDocument::Private::Insert(
     CEDTextDocument& doc, DocPoint dp,
     U16View view, LogicLine linedata, 
     bool behind) noexcept {
+    // 成功时候
+    const auto on_success = [&doc]() noexcept {
+        // 文本修改
+        Private::ValueChanged(doc, Changed_Text);
+    };
+    // 添加总长度
+    const auto add_total = [&doc](uint32_t l) noexcept {
+        doc.m_info.total_length += l; return l;
+    };
     // 需要重绘
     Private::NeedRedraw(doc);
     // 断言检测
@@ -2287,8 +2307,9 @@ bool RichED::CEDTextDocument::Private::Insert(
         const auto len = view.second - view.first;
         if (len <= cell->RefString().Left()) {
             cell->InsertText(pos, view);
-            line_ptr->length += len;
+            line_ptr->length += add_total(len);
             Private::Dirty(doc, *cell, dp.line);
+            on_success();
             return true;
         }
     }
@@ -2335,8 +2356,8 @@ bool RichED::CEDTextDocument::Private::Insert(
     const auto view2 = detail::nice_view2(view, cell_b->RefString().Left());
 
     line_ptr[0].first = static_cast<CEDTextCell*>(*pointer_to_the_first_at_line);;
-    line_ptr[0].length += view1.second - view1.first;
-    line_ptr[lf_count].length += view2.second - view2.first;
+    line_ptr[0].length += add_total(view1.second - view1.first);
+    line_ptr[lf_count].length += add_total(view2.second - view2.first);
     const auto old_line_ptr = line_ptr;
     cell_a->InsertText(pos, view1);
     cell_b->InsertText(0, view2);
@@ -2364,7 +2385,7 @@ bool RichED::CEDTextDocument::Private::Insert(
                 if (!obj) return false;
                 // 插入数据
                 const_cast<CellMeta&>(obj->RefMetaInfo()).metatype = insert_type;
-                line_ptr->length += this_end - line_view.first;
+                line_ptr->length += add_total(this_end - line_view.first);
                 obj->InsertText(0, { line_view.first, this_end });
                 RichED::InsertAfterFirst(*cell, *obj);
                 cell = obj;
@@ -2383,8 +2404,8 @@ bool RichED::CEDTextDocument::Private::Insert(
             cell->AsEOL();
         }
     }
-
     //doc.m_vLogic;
+    on_success();
     return true;
 }
 
@@ -2400,6 +2421,11 @@ bool RichED::CEDTextDocument::Private::Insert(
 bool RichED::CEDTextDocument::Private::Insert(
     CEDTextDocument& doc, DocPoint dp, CEDTextCell& obj, 
     LogicLine& line_data) noexcept {
+    // 成功时候
+    const auto on_success = [&doc]() noexcept {
+        // 文本修改
+        Private::ValueChanged(doc, Changed_Text);
+    };
     // 需要重绘
     Private::NeedRedraw(doc);
     assert(obj.RefMetaInfo().eol == false && "cannot insert EOL");
@@ -2429,9 +2455,14 @@ bool RichED::CEDTextDocument::Private::Insert(
     else if (pos < cell->RefString().length) if (!cell->Split(pos)) return false;
     RichED::InsertAfterFirst(*insert_after_this, obj);
 
-    
     line_data.first = detail::next_cell(next_is_first);
-    line_data.length += obj.RefString().length;
+    // 添加总长度
+    const auto add_total = [&doc](uint32_t l) noexcept {
+        doc.m_info.total_length += l; return l;
+    };
+    // 添加长度
+    line_data.length += add_total(obj.RefString().length);
+    on_success();
     return true;
 }
 
@@ -2764,6 +2795,17 @@ void RichED::CEDTextDocument::Private::RecordTextEx(
 bool RichED::CEDTextDocument::Private::RemoveText(
     CEDTextDocument& doc, DocPoint begin, DocPoint end,
     const CheckRangeCtx& ctx) noexcept {
+    // 成功时候
+    const auto on_success = [&doc]() noexcept {
+        // 文本修改
+        Private::ValueChanged(doc, Changed_Text);
+    };
+    // 减去总长度
+    const auto sub_total = [&doc](uint32_t len) noexcept {
+        assert(len <= doc.m_info.total_length);
+        doc.m_info.total_length -= len;
+        return len;
+    };
     // 解包
     const auto cell1 = ctx.begin.cell;
     const auto pos1 = ctx.begin.offset;
@@ -2783,7 +2825,7 @@ bool RichED::CEDTextDocument::Private::RemoveText(
     if (cell1 == cell2) {
         const auto prev_cell1 = cell1->prev;
         delete_eol = cell1->RefMetaInfo().eol;
-        cell1->RemoveTextEx({ pos1, pos2 - pos1 });
+        cell1->RemoveTextEx({ pos1, sub_total(pos2 - pos1) });
         delete_eol = delete_eol && prev_cell1->next != cell1;
     }
     else {
@@ -2792,7 +2834,8 @@ bool RichED::CEDTextDocument::Private::RemoveText(
             const auto next_node = node->next;
             const auto cell_obj = static_cast<CEDTextCell*>(node);
             node = next_node;
-            cell_obj->Dispose();
+            sub_total(cell_obj->RefString().length);
+;           cell_obj->Dispose();
         }
         // 连接CELL1, CELL2
         cell1->next = cell2;
@@ -2800,10 +2843,10 @@ bool RichED::CEDTextDocument::Private::RemoveText(
         cell1->ClearEOL();
         // CELL1: 删除[pos1, end)
         // CELL2: 删除[0, pos2)
-        cell1->RemoveTextEx({ pos1, cell1->RefString().length - pos1 });
+        cell1->RemoveTextEx({ pos1, sub_total(cell1->RefString().length - pos1) });
         // EOL检测
         delete_eol = cell2->RefMetaInfo().eol && pos2 == cell2->RefString().length;
-        cell2->RemoveTextEx({ 0, pos2 });
+        cell2->RemoveTextEx({ 0, sub_total(pos2) });
     }
 
     // EOL恢复
@@ -2836,6 +2879,7 @@ bool RichED::CEDTextDocument::Private::RemoveText(
         std::memmove(ptr + begin.line + 1, ptr + end.line + 1, bsize);
         llv.ReduceSize(len + begin.line - end.line);
     }
+    on_success();
     return true;
 }
 

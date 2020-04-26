@@ -298,12 +298,12 @@ namespace RichED {
     public:
         // password helper - string-view
         template<typename T>
-        void PWHelperView(T call, const CEDTextCell& cell) noexcept {
+        auto PWHelperView(T call, const CEDTextCell& cell) noexcept {
             char32_t buffer[TEXT_CELL_STR_MAXLEN + 1];
             U16View view = this->get_view(cell);
             if (m_info.flags & Flag_UsePassword) 
                 view = this->password_helper16(buffer, m_info.password_cha16x2, m_bPassword4, cell);
-            call(view);
+            return call(view);
         }
         // password helper - code-pos
         auto PWHelperPos(const CEDTextCell& cell, uint32_t pos) noexcept ->uint32_t;
@@ -314,15 +314,15 @@ namespace RichED {
     enum ValuedChanged : uint32_t {
         // view changed, need redraw
         Changed_View            = 1 << 0,
-        // selection changed
+        // selection changed        
         Changed_Selection       = 1 << 1,
-        // caret changed
+        // caret changed            
         Changed_Caret           = 1 << 2,
-        // text changed
+        // text changed            
         Changed_Text            = 1 << 3,
-        // estimated width changed
+        // estimated width  changed  [not impl yet]
         Changed_EstimatedWidth  = 1 << 4,
-        // estimated height changed
+        // estimated height changed  [not impl yet]
         Changed_EstimatedHeight = 1 << 5,
     };
 }

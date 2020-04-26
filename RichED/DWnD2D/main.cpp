@@ -16,7 +16,7 @@ enum { ECODE_FAILED = -1, ECODE_OOM = -2, ECODE_DRAW = -3, ECODE_RESIZE = -4 };
 
 enum { DEF_FONT_SIZE = 42, UPDATE_DELTA_TIME = 40 };
 
-enum : uint32_t { PASSWORD_CHAR = U'😂' };
+enum : uint32_t { PASSWORD_CHAR = U'😂', MAX_LENGTH = 100 };
 
 enum { CTRL_X = 100, CTRL_Y = 100,  };
 
@@ -272,7 +272,7 @@ bool WinDWnD2D::Init(HWND hwnd) noexcept {
             //0, Direction_T2B, Direction_R2L,
             Flag_RichText | Flag_MultiLine,
             //Flag_UsePassword | Flag_MultiLine,
-            PASSWORD_CHAR, 0xffffff, 0,
+            PASSWORD_CHAR, MAX_LENGTH, 0,
             VAlign_Baseline, Mode_SpaceOrCJK,
             { DEF_FONT_SIZE, 0, 0, Effect_None } 
         };
@@ -495,7 +495,7 @@ LRESULT WinDWnD2D::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
                 g_platform.ime_char_count -= index;
                 const U16View view{ buf, buf + index };
                 index = 0;
-                g_platform.Doc().GuiText(view);
+                gui_op = g_platform.Doc().GuiText(view);
             }
         }
         // 单个输入
@@ -510,8 +510,9 @@ LRESULT WinDWnD2D::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
             }
             // 有效字符:  \b 之类的控制符不算
             if ((ch >= 0x20 && ch != 0x7f) || ch == '\t')
-                g_platform.Doc().GuiChar(ch);
+                gui_op = g_platform.Doc().GuiChar(ch);
         }
+        if (!gui_op) ::MessageBeep(MB_ICONWARNING);
         break;
     case WM_KEYDOWN:
         handled = true;
@@ -757,11 +758,10 @@ void WinDWnD2D::RecreateContext(CEDTextCell& cell) noexcept {
         return this->data.dw1_deffont;
     }();
     // 创建新的布局
-    HRESULT hr = S_OK; 
     const auto cell_context = reinterpret_cast<IDWriteTextLayout**>(&cell.ctx.context);
-    this->Doc().PWHelperView([=, &hr](RichED::U16View view) noexcept {
+    HRESULT hr = this->Doc().PWHelperView([=](RichED::U16View view) noexcept {
         static_assert(sizeof(wchar_t) == sizeof(view.first[0]), "must be same!");
-        hr = this->data.dw1_factory->CreateTextLayout(
+        return this->data.dw1_factory->CreateTextLayout(
             reinterpret_cast<const wchar_t*>(view.first), view.second- view.first,
             fmt, 0, 0, cell_context
         );
@@ -1104,6 +1104,12 @@ void WinDWnD2D::Update() noexcept {
         //g_platform.Doc().GenText(&str, {}, { g_platform.Doc().GetLogicLineCount() });
         //str.append(L"\r\n");
         //::OutputDebugStringW(str.c_str());
+        const auto now_len = this->Doc().RefInfo().total_length;
+        std::printf(" %04d ", now_len);
+    }
+    // Selection
+    if (flag & Changed_Selection) {
+        ::OutputDebugStringW(L"SC ");
     }
 }
 
