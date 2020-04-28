@@ -435,6 +435,21 @@ LRESULT WinDWnD2D::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
         handled = true;
         result = 0;
         break;
+#if 0
+    case WM_SETFOCUS:
+        ::CreateCaret(hwnd, (HBITMAP)NULL, 2, 20);
+        ::SetCaretPos(50, 50);
+        ::ShowCaret(hwnd);
+        handled = true;
+        result = 0;
+        break;
+    case WM_KILLFOCUS:
+        ::HideCaret(hwnd);
+        ::DestroyCaret();
+        handled = true;
+        result = 0;
+        break;
+#endif
     case WM_PAINT:
     case WM_DISPLAYCHANGE:
         ::BeginPaint(hwnd, &ps);
@@ -641,6 +656,7 @@ LRESULT WinDWnD2D::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
         handled = true;
         result = 1;
         break;
+
         // IME 支持
     //case WM_IME_STARTCOMPOSITION:
     case WM_IME_COMPOSITION:
@@ -687,7 +703,7 @@ void WinDWnD2D::SetImePosition() noexcept {
                 LOGFONTW lf = { 0 };
                 lf.lfHeight = static_cast<LONG>(caret.height);
                 //lf.lfItalic
-                if (ImmSetCompositionFontW(imc, &lf)) {
+                if (::ImmSetCompositionFontW(imc, &lf)) {
                     ret = TRUE;
                 }
             }
