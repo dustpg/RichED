@@ -85,7 +85,7 @@ struct WinDWnD2D final : IEDTextPlatform {
     // ctor
     WinDWnD2D() noexcept { ::memset(&this->data, 0, sizeof(this->data)); }
     // on out of memory, won't be called on ctor
-    auto OnOOM(uint32_t retry_count, size_t) noexcept->HandleOOM override { std::exit(ECODE_OOM); return OOM_NoReturn; }
+    auto OnOOM(size_t retry_count, size_t) noexcept->HandleOOM override { std::exit(ECODE_OOM); return OOM_NoReturn; }
     // is valid password
     bool IsValidPassword(char32_t ch) noexcept override { 
         return true;

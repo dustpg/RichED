@@ -4,6 +4,7 @@ Cross-platform simplified rich-text edit widget
 
 跨平台简化富文本编辑控件
 
+![title](./res/title.gif)
 
 ### How to use
 
