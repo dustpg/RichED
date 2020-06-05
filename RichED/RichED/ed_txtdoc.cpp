@@ -1,10 +1,15 @@
-﻿#include "ed_txtdoc.h"
+﻿#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+
+#include "ed_txtdoc.h"
 #include "ed_txtplat.h"
 #include "ed_txtcell.h"
 
-#include <cstdlib>
-#include <cstring>
 #include <algorithm>
+
+// debug via longui
+//#include <debugger/ui_debug.h>
 
 enum { RED_INIT_ARRAY_BUFLEN = 32 };
 
@@ -559,8 +564,14 @@ RichED::CEDTextDocument::~CEDTextDocument() noexcept {
 /// </summary>
 /// <returns></returns>
 auto RichED::CEDTextDocument::Update() noexcept -> ValuedChanged {
+    // 调整大小可能会导致插入符移动
+    if ((m_flagChanged & Changed_ViewportSize) && m_info.wrap_mode) {
+        // 调整
+        Private::RefreshCaret(*this, m_dpCaret, nullptr);
+    }
     const auto rv = m_flagChanged;
     m_flagChanged = 0;
+    // 重绘
     if (rv & Changed_View) {
         const auto bottom = m_rcViewport.y + m_rcViewport.height;
         const auto maxbtm = max_unit();
@@ -602,7 +613,7 @@ void RichED::CEDTextDocument::Render(CtxPtr ctx) noexcept {
 /// </summary>
 /// <param name="pos">The position.</param>
 /// <returns></returns>
-void RichED::CEDTextDocument::SetPos(Point pos) noexcept {
+void RichED::CEDTextDocument::MoveViewportAbs(Point pos) noexcept {
     Point target_view;
     // 垂直布局
     if (m_matrix.read_direction & 1) {
@@ -623,7 +634,7 @@ void RichED::CEDTextDocument::SetPos(Point pos) noexcept {
 /// </summary>
 /// <param name="pos">The position.</param>
 /// <returns></returns>
-void RichED::CEDTextDocument::AddPos(Point pos) noexcept {
+void RichED::CEDTextDocument::MoveViewportRel(Point pos) noexcept {
     Point target_view{ m_rcViewport.x, m_rcViewport.y };
     // 垂直布局
     if (m_matrix.read_direction & 1) {
@@ -900,7 +911,9 @@ bool RichED::CEDTextDocument::RemoveText(DocPoint begin, DocPoint end) noexcept 
 /// </summary>
 /// <param name="size">The size.</param>
 /// <returns></returns>
-void RichED::CEDTextDocument::Resize(Size size) noexcept {
+void RichED::CEDTextDocument::ResizeViewport(Size size) noexcept {
+    if (m_rcViewport.width == size.width && 
+        m_rcViewport.height == size.height) return;
     // 垂直布局
     if (m_matrix.read_direction & 1) {
         m_rcViewport.width = size.height;
@@ -914,7 +927,7 @@ void RichED::CEDTextDocument::Resize(Size size) noexcept {
     // 清除视觉行
     if (m_vVisual.IsOK()) m_vVisual.Resize(1, platform);
     // 重绘
-    Private::NeedRedraw(*this);
+    Private::ValueChanged(*this, Changed_View | Changed_ViewportSize);
 }
 
 /// <summary>
@@ -3140,6 +3153,7 @@ auto RichED::CEDTextDocument::Private::CheckPoint(
 }
 #endif
 
+
 /// <summary>
 /// Updates the caret.
 /// </summary>
@@ -3149,7 +3163,6 @@ auto RichED::CEDTextDocument::Private::CheckPoint(
 /// <returns></returns>
 void RichED::CEDTextDocument::Private::RefreshCaret(
     CEDTextDocument & doc, DocPoint dp, HitTestCtx * pctx) noexcept {
-
     HitTestCtx ctx;
     if (!pctx) Private::HitTest(doc, dp, ctx);
     else ctx = *pctx;
@@ -3167,7 +3180,6 @@ void RichED::CEDTextDocument::Private::RefreshCaret(
             ;
         Private::ValueChanged(doc, Changed_Caret);
     }
-
     // TODO: 部分情况视口跟随插入符
 }
 

@@ -5,9 +5,9 @@
 #include <dwrite_1.h>
 #include <wincodec.h>
 #pragma comment(lib, "d2d1.lib")
+#pragma comment(lib, "Imm32.lib")
 #pragma comment(lib, "dwrite.lib")
 #pragma comment(lib, "windowscodecs.lib")
-
 
 
 enum { WINDOW_WIDTH = 1280, WINDOW_HEIGHT = 720 };
@@ -624,13 +624,13 @@ LRESULT WinDWnD2D::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
         case VK_F5:
             ctrl_w += 10.f;
             //ctrl_h += 10.f;
-            g_platform.Doc().Resize({ ctrl_w, ctrl_h });
+            g_platform.Doc().ResizeViewport({ ctrl_w, ctrl_h });
             break;
         case VK_F6:
             if (ctrl_w > 20.f) {
                 ctrl_w -= 10.f;
                 //ctrl_h -= 10.f;
-                g_platform.Doc().Resize({ ctrl_w, ctrl_h });
+                g_platform.Doc().ResizeViewport({ ctrl_w, ctrl_h });
             }
             break;
         case VK_F7:
@@ -1078,7 +1078,7 @@ void WinDWnD2D::DebugOutput(const char* text, bool high) noexcept {
 /// <param name="height">The height.</param>
 /// <returns></returns>
 void WinDWnD2D::Resize(uint32_t width, uint32_t height) noexcept {
-    this->Doc().Resize({ ctrl_w, ctrl_h });
+    this->Doc().ResizeViewport({ ctrl_w, ctrl_h });
     const auto rendertarget = this->data.d2d_rendertarget;
     const auto hr = rendertarget->Resize({ width, height });
     if (FAILED(hr)) std::exit(ECODE_RESIZE);
@@ -1121,7 +1121,7 @@ void WinDWnD2D::Update() noexcept {
         //str.append(L"\r\n");
         //::OutputDebugStringW(str.c_str());
         const auto now_len = this->Doc().RefInfo().total_length;
-        std::printf(" %04d ", now_len);
+        //std::printf(" %04d ", now_len);
     }
     // Selection
     if (flag & Changed_Selection) {
@@ -1195,8 +1195,6 @@ auto LoadBitmapFromFile(
     if (SUCCEEDED(hr)) {
         hr = pIWICFactory->CreateFormatConverter(&pConverter);
     }
-
-
     if (SUCCEEDED(hr)) {
         hr = pConverter->Initialize(
             pSource,

@@ -3,7 +3,7 @@
 // modify this config-file if you want
 
 // impl RichED::Alloc/Free/ReAlloc
-//#define RED_CUSTOM_ALLOCFUNC
+#define RED_CUSTOM_ALLOCFUNC
 
 // x86 CPU cache-line = 64
 #define RED_LUT_ALIGNED alignas(64)

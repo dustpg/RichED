@@ -107,12 +107,12 @@ namespace RichED {
         auto Update() noexcept->ValuedChanged;
         // render
         void Render(CtxPtr) noexcept;
-        // add current doc view-point pos
-        void AddPos(Point) noexcept;
-        // set doc view-point pos
-        void SetPos(Point) noexcept;
+        // move current doc view-point pos[relatively]
+        void MoveViewportRel(Point) noexcept;
+        // set doc view-point pos[absolutely]
+        void MoveViewportAbs(Point) noexcept;
         // resize doc view-zone
-        void Resize(Size) noexcept;
+        void ResizeViewport(Size) noexcept;
         // save to bin-file for self-use
         bool SaveBinFile(CtxPtr) noexcept;
         // load from bin-file for self-use
@@ -328,5 +328,7 @@ namespace RichED {
         Changed_EstimatedWidth  = 1 << 4,
         // estimated height changed  [not impl yet]
         Changed_EstimatedHeight = 1 << 5,
+        // size changed
+        Changed_ViewportSize    = 1 << 6,
     };
 }
