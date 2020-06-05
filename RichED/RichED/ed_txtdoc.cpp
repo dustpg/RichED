@@ -339,11 +339,13 @@ namespace RichED {
     };
     // priavate impl for CEDTextDocument
     struct CEDTextDocument::Private {
+        // check point
+        //static auto CheckPoint(CEDTextDocument& doc, DocPoint) noexcept->CellPoint;
+        // update estimated width
+        //static void UpdatemEstimated();
         // Gen Text
         template<typename T, typename U> 
         static void GenText(CEDTextDocument& doc, DocPoint begin, DocPoint end, T ap, U lf) noexcept;
-        // alloc
-        static void*Alloc(CEDTextDocument& doc, size_t len) noexcept;
         // record op
         static bool IsRecord(const CEDTextDocument& doc) noexcept;
         // mouse
@@ -354,8 +356,6 @@ namespace RichED {
         static bool HitTest(CEDTextDocument& doc, Point, HitTestCtx&) noexcept;
         // hit doc from doc point
         static void HitTest(CEDTextDocument& doc, DocPoint, HitTestCtx&) noexcept;
-        // check point
-        //static auto CheckPoint(CEDTextDocument& doc, DocPoint) noexcept->CellPoint;
         // force update caret
         static void RefreshCaret(CEDTextDocument& doc, DocPoint, HitTestCtx*) noexcept;
         // update selection
@@ -414,6 +414,8 @@ namespace RichED {
         static void ValueChanged(CEDTextDocument& doc, uint32_t flag) noexcept { doc.m_flagChanged |= flag; }
         // need redraw
         static void NeedRedraw(CEDTextDocument& doc) noexcept { ValueChanged(doc, Changed_View); }
+        // check estimated
+        static void CheckEstimated(CEDTextDocument& doc) noexcept;
     };
     // RichData ==
     inline bool operator==(const RichData& a, const RichData& b) noexcept {
@@ -495,6 +497,7 @@ RichED::CEDTextDocument::CEDTextDocument(IEDTextPlatform& plat, const DocInitArg
     m_rcViewport = { 0, 0, 0, 0 };
     m_rcCaret = { 0, 0, 1, arg.riched.size };
     m_szEstimated = { 0, 0 };
+    m_szEstimatedCmp = { 0, 0 };
     m_dpAnchor = { 0, 0 };
     m_dpCaret = { 0, 0 };
     m_dpSelBegin = { 0, 0 };
@@ -564,22 +567,25 @@ RichED::CEDTextDocument::~CEDTextDocument() noexcept {
 /// </summary>
 /// <returns></returns>
 auto RichED::CEDTextDocument::Update() noexcept -> ValuedChanged {
-    // 调整大小可能会导致插入符移动
-    if ((m_flagChanged & Changed_ViewportSize) && m_info.wrap_mode) {
+    // 调整宽度可能会导致插入符移动
+    if ((m_flagChanged & Changed_ViewportWidth) && m_info.wrap_mode) {
         // 调整
         Private::RefreshCaret(*this, m_dpCaret, nullptr);
     }
-    const auto rv = m_flagChanged;
-    m_flagChanged = 0;
     // 重绘
-    if (rv & Changed_View) {
+    if (m_flagChanged & Changed_View) {
         const auto bottom = m_rcViewport.y + m_rcViewport.height;
         const auto maxbtm = max_unit();
         Private::ExpandVL(*this, uint32_t(-1), bottom);
+        Private::CheckEstimated(*this);
+        m_szEstimatedCmp = m_szEstimated;
 #ifndef NDEBUG
         this->platform.DebugOutput("<BeforeRender>", false);
 #endif // !NDEBUG
     }
+    // 返回
+    const auto rv = m_flagChanged;
+    m_flagChanged = 0;
     return static_cast<ValuedChanged>(rv);
 }
 
@@ -590,19 +596,47 @@ auto RichED::CEDTextDocument::Update() noexcept -> ValuedChanged {
 void RichED::CEDTextDocument::Render(CtxPtr ctx) noexcept {
     const auto count = m_vVisual.GetSize();
     if (!count) return;
-
+    // TODO: 固定行高
     const auto data = m_vVisual.GetData();
     const auto end_line = data + count - 1;
+    // 计算起点
     auto this_line = data;
+    // l 逻辑/布局 ltrb 左上右下
+    const auto view_lt = m_rcViewport.y;
+    const auto view_lb = m_rcViewport.y + m_rcViewport.height;
+    const auto view_ll = m_rcViewport.x;
+    const auto view_lr = m_rcViewport.x + m_rcViewport.width;
+    while (this_line != end_line) {
+        const auto next_line = this_line + 1;
+        if (next_line->offset >= view_lt) break;
+        this_line = next_line;
+    }
+    // 计算右边
+    const auto cal_layout_right = [](CEDTextCell& cell) noexcept {
+        return cell.metrics.bounding.right + cell.metrics.pos + cell.metrics.offset.x;
+    };
     // [0, count - 1)
     while (this_line != end_line) {
         const auto next_line = this_line + 1;
-        const auto cells = detail::cfor_cells(this_line->first, next_line->first);
+        // 计算起点
+        const auto start_point = [=](CEDTextCell* cell) noexcept {
+            while (cal_layout_right(*cell) <= view_ll) {
+                const auto cur = cell;
+                cell = static_cast<CEDTextCell*>(cur->next);
+                if (cur->RefMetaInfo().eol) break;
+            }
+            return cell;
+        }(this_line->first);
+        // 获取循环表
+        const auto cells = detail::cfor_cells(start_point, next_line->first);
         const auto baseline = this_line->offset + this_line->ar_height_max;
-        // TODO: 固定行高
         for (auto& cell : cells) {
             this->platform.DrawContext(ctx, cell, baseline);
+            // 超过就退出
+            if (cal_layout_right(cell) >= view_lr 
+                && cell.RefMetaInfo().metatype != Type_UnderRuby) break;
         }
+        if (next_line->offset >= view_lb) break;
         this_line = next_line;
     }
 }
@@ -912,22 +946,27 @@ bool RichED::CEDTextDocument::RemoveText(DocPoint begin, DocPoint end) noexcept 
 /// <param name="size">The size.</param>
 /// <returns></returns>
 void RichED::CEDTextDocument::ResizeViewport(Size size) noexcept {
-    if (m_rcViewport.width == size.width && 
-        m_rcViewport.height == size.height) return;
+    uint32_t flag = 0;
     // 垂直布局
     if (m_matrix.read_direction & 1) {
+        if (m_rcViewport.width != size.height) flag |= Changed_ViewportWidth;
+        if (m_rcViewport.height != size.width) flag |= Changed_ViewportHeight;
         m_rcViewport.width = size.height;
         m_rcViewport.height = size.width;
     }
     // 水平布局
     else {
+        if (m_rcViewport.width != size.width) flag |= Changed_ViewportWidth;
+        if (m_rcViewport.height != size.height) flag |= Changed_ViewportHeight;
         m_rcViewport.width = size.width;
         m_rcViewport.height = size.height;
     }
+    // 没有变化
+    if (!flag) return;
     // 清除视觉行
     if (m_vVisual.IsOK()) m_vVisual.Resize(1, platform);
     // 重绘
-    Private::ValueChanged(*this, Changed_View | Changed_ViewportSize);
+    Private::ValueChanged(*this, Changed_View | flag);
 }
 
 /// <summary>
@@ -940,7 +979,10 @@ void RichED::CEDTextDocument::Private::ViewPoint(
     CEDTextDocument& doc, Point point) noexcept {
     // 修改才改变
     if (point.x == doc.m_rcViewport.x && point.y == doc.m_rcViewport.y) return;
-    int bk = 9;
+    doc.m_rcViewport.x = point.x;
+    doc.m_rcViewport.y = point.y;
+    // 重绘
+    Private::ValueChanged(doc, Changed_View);
 }
 
 
@@ -984,6 +1026,16 @@ void RichED::CEDTextDocument::Private::GenText(
 }
 
 /// <summary>
+/// GetEstimatedSize in view sapce
+/// </summary>
+/// <returns></returns>
+auto RichED::CEDTextDocument::GetEstimatedSize() const noexcept -> Size {
+    auto size = m_szEstimated;
+    if (m_matrix.read_direction & 1) std::swap(size.width, size.height);
+    return size;
+}
+
+/// <summary>
 /// Gens the text.
 /// </summary>
 /// <param name="ctx">The CTX.</param>
@@ -1009,7 +1061,6 @@ void RichED::CEDTextDocument::GenText(CtxPtr ctx, DocPoint begin, DocPoint end) 
 /// <param name="lf">The lf.</param>
 /// <returns></returns>
 void RichED::CEDTextDocument::SetLineFeed(const LineFeed lf) noexcept {
-    //const auto prev_len = m_linefeed.length;
     m_linefeed = lf;
     // 文本修改
     Private::ValueChanged(*this, Changed_Text);
@@ -1849,6 +1900,9 @@ void RichED::CEDTextDocument::Private::ExpandVL(
     // 已经处理完毕
     if (line.lineno > target_line) return;
     if (line.offset >= bottom) return;
+    // 估计宽度: 如果从0开始则从0计算宽度
+    auto est_width = doc.m_szEstimated.width;
+    if (!count) est_width = 0;
 
 #ifndef NDEBUG
     doc.platform.DebugOutput("<ExpandVL>", false);
@@ -1919,11 +1973,12 @@ void RichED::CEDTextDocument::Private::ExpandVL(
         // --------------------------
         // --------------------- EOVL
         // --------------------------
-
+        
 
         // 行内偏移
         cell->metrics.pos = offset_inline;
         offset_inline += cell->metrics.width;
+        est_width = std::max(offset_inline, est_width);
         char_length_vl += cell->RefString().length;
         // 行内升部降部最大信息
         line.ar_height_max = std::max(cell->metrics.ar_height, line.ar_height_max);
@@ -1953,6 +2008,13 @@ void RichED::CEDTextDocument::Private::ExpandVL(
     }
     // 末尾
     push_data(vlv, line, doc.platform);
+    // 估计宽度
+    doc.m_szEstimated.width = est_width;
+    // 估计高度
+    const auto llen = doc.m_vLogic.GetSize();
+    const auto disl = line.lineno + 1;
+    const auto base = line.offset;
+    doc.m_szEstimated.height = base * make_div(llen, disl);
 }
 
 
@@ -2911,6 +2973,25 @@ bool RichED::CEDTextDocument::Private::RemoveText(
     return true;
 }
 
+/// <summary>
+/// check if estimated-size changed
+/// </summary>
+/// <param name="doc"></param>
+/// <param name="old"></param>
+/// <returns></returns>
+void RichED::CEDTextDocument::Private::CheckEstimated(CEDTextDocument& doc) noexcept {
+    const auto old = doc.m_szEstimatedCmp;
+    const auto cur = doc.m_szEstimated;
+    uint32_t flag = 0;
+    constexpr uint32_t mask = Changed_EstimatedWidth | Changed_EstimatedHeight;
+    constexpr uint32_t estw = Changed_EstimatedWidth | (Changed_EstimatedWidth << 2);
+    constexpr uint32_t esth = Changed_EstimatedHeight | (Changed_EstimatedHeight << 2);
+    if (old.width != cur.width) flag |= estw;
+    if (old.height != cur.height) flag |= esth;
+    flag >>= doc.m_matrix.read_direction & 1;
+    flag &= mask;
+    Private::ValueChanged(doc, flag);
+}
 
 /// <summary>
 /// Dirties the specified document.

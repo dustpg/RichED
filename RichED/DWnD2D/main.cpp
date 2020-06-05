@@ -21,7 +21,7 @@ enum : uint32_t { PASSWORD_CHAR = U'😂', MAX_LENGTH = 100 };
 enum { CTRL_X = 100, CTRL_Y = 100,  };
 
 float ctrl_w = 800, ctrl_h = 200;
-
+float view_x = 0, view_y = 0;
 
 enum : uintptr_t {
     TIMER_ID_NULL = 0,
@@ -73,6 +73,7 @@ struct DWnD2DDataField {
     ID2D1Factory*           d2d_factory;
     ID2D1SolidColorBrush*   d2d_black;
     ID2D1SolidColorBrush*   d2d_border;
+    ID2D1SolidColorBrush*   d2d_base;
     ID2D1SolidColorBrush*   d2d_brush;
     ID2D1SolidColorBrush*   d2d_cell1;
     ID2D1SolidColorBrush*   d2d_cell2;
@@ -343,7 +344,7 @@ bool WinDWnD2D::Init(HWND hwnd) noexcept {
             uint32_t(rc.bottom - rc.top)
         };
         hr = d.d2d_factory->CreateHwndRenderTarget(
-            D2D1::RenderTargetProperties(),
+            D2D1::RenderTargetProperties(D2D1_RENDER_TARGET_TYPE_SOFTWARE),
             D2D1::HwndRenderTargetProperties(hwnd, size),
             &d.d2d_rendertarget
         );
@@ -376,6 +377,12 @@ bool WinDWnD2D::Init(HWND hwnd) noexcept {
     }
     if (SUCCEEDED(hr)) {
         hr = d.d2d_rendertarget->CreateSolidColorBrush(
+            D2D1::ColorF(D2D1::ColorF::Red, 0.3f),
+            &d.d2d_base
+        );
+    }
+    if (SUCCEEDED(hr)) {
+        hr = d.d2d_rendertarget->CreateSolidColorBrush(
             D2D1::ColorF(D2D1::ColorF::Green, 0.25f),
             &d.d2d_cell1
         );
@@ -395,6 +402,7 @@ void WinDWnD2D::Clear() noexcept {
     ::SafeRelease(this->data.dw1_deffont);
     ::SafeRelease(this->data.dw1_factory);
     ::SafeRelease(this->data.d2d_black);
+    ::SafeRelease(this->data.d2d_base);
     ::SafeRelease(this->data.d2d_border);
     ::SafeRelease(this->data.d2d_brush);
     ::SafeRelease(this->data.d2d_cell1);
@@ -482,7 +490,8 @@ LRESULT WinDWnD2D::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
         x = int16_t(LOWORD(lParam)) - CTRL_X;
         y = int16_t(HIWORD(lParam)) - CTRL_Y;
         g_platform.click_in_area = false;
-        if (x >= 0 && y >= 0 && x < int16_t(ctrl_w) && y < int16_t(ctrl_h)) {
+        if (x >= int16_t(view_x) && y >= int16_t(view_y) 
+            && x < int16_t(ctrl_w + view_x) && y < int16_t(ctrl_h + view_y)) {
             g_platform.click_in_area = true;
             g_platform.Doc().GuiLButtonDown({ (float)x, (float)y }, !!(wParam & MK_SHIFT));
         }
@@ -537,6 +546,7 @@ LRESULT WinDWnD2D::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
         shift = (::GetKeyState(VK_SHIFT) & 0x80) != 0;
         switch (wParam)
         {
+            float* float_ptr;
         default:
             handled = false;
             break;
@@ -622,16 +632,17 @@ LRESULT WinDWnD2D::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
             gui_op = g_platform.Doc().GuiItalic(CEDTextDocument::Set_Change);
             break;
         case VK_F5:
-            ctrl_w += 10.f;
-            //ctrl_h += 10.f;
+            float_ptr = ctrl ? &ctrl_h : &ctrl_w;
+            if (shift) *float_ptr += 10.f;
+            else if (*float_ptr > 20.f) *float_ptr -= 10.f;
             g_platform.Doc().ResizeViewport({ ctrl_w, ctrl_h });
             break;
         case VK_F6:
-            if (ctrl_w > 20.f) {
-                ctrl_w -= 10.f;
-                //ctrl_h -= 10.f;
-                g_platform.Doc().ResizeViewport({ ctrl_w, ctrl_h });
-            }
+            float_ptr = ctrl ? &view_x : &view_y;
+            if (shift) *float_ptr += 10;
+            else *float_ptr -= 10;
+            g_platform.Doc().MoveViewportAbs({ view_x, view_y });
+            ::InvalidateRect(hwnd, nullptr, true);
             break;
         case VK_F7:
             gui_op = g_platform.Doc().GuiInline(*info.as_info(), info.create_img(L"../common/2.png"), Type_Image);
@@ -1127,6 +1138,15 @@ void WinDWnD2D::Update() noexcept {
     if (flag & Changed_Selection) {
         ::OutputDebugStringW(L"SC ");
     }
+    // w
+    const auto eszie = this->Doc().GetEstimatedSize();
+    if (flag & (Changed_EstimatedWidth | Changed_EstimatedHeight)) {
+        if (flag & Changed_EstimatedWidth)
+            std::printf("EstW: %6.f", eszie.width);
+        if (flag & Changed_EstimatedHeight)
+            std::printf("EstH: %6.f", eszie.height);
+        std::printf("\n");
+    }
 }
 
 /// <summary>
@@ -1141,29 +1161,36 @@ void WinDWnD2D::Render() noexcept {
     if (renderer->CheckWindowState() & D2D1_WINDOW_STATE_OCCLUDED) return;
     renderer->BeginDraw();
     renderer->Clear(D2D1::ColorF(0x66ccff));
+
+
+    renderer->SetAntialiasMode(D2D1_ANTIALIAS_MODE_ALIASED);
+    renderer->SetTransform(D2D1::Matrix3x2F::Translation(CTRL_X + view_x, CTRL_Y + view_y));
+    renderer->DrawRectangle({ 0, 0, ctrl_w, ctrl_h }, this->data.d2d_border);
+
+
+
     renderer->SetTransform(D2D1::Matrix3x2F::Translation(CTRL_X, CTRL_Y));
-    renderer->DrawRectangle({0, 0, ctrl_w, ctrl_h }, this->data.d2d_border);
+    const auto ssss = this->Doc().GetEstimatedSize();
+    renderer->DrawRectangle({ 0, 0, ssss.width, ssss.height }, this->data.d2d_base);
+    renderer->SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
 
     this->DrawSelection();
     this->Doc().Render(nullptr);
+
     if (this->caret_blink_i) {
         const auto caret = this->Doc().GetCaret();
         // GetCaret返回的矩形宽度没有意义, 可以进行自定义
         const float custom_width = 2.f;
-
         D2D1_RECT_F rect = {
             caret.x - custom_width * 0.5f,      // 向前后偏移一半
             caret.y + 1,                        // 上下保留一个单位的空白以保持美观
             caret.x + custom_width * 0.5f,      // 向后后偏移一半
             caret.y + caret.height - 1          // 上下保留一个单位的空白以保持美观
         };
-
         this->Map(&rect.left, &rect.right);
-
         renderer->FillRectangle(rect, this->data.d2d_black);
     }
     const auto hr = renderer->EndDraw();
-
     if (FAILED(hr)) std::exit(ECODE_DRAW);
 }
 
@@ -1219,3 +1246,35 @@ auto LoadBitmapFromFile(
     ::SafeRelease(pScaler);
     return hr;
 }
+
+
+#ifdef RED_CUSTOM_ALLOCFUNC
+
+/// <summary>
+/// Allocs the specified sz.
+/// </summary>
+/// <param name="len">The length.</param>
+/// <returns></returns>
+void* RichED::Alloc(size_t len) noexcept {
+    return std::malloc(len);
+}
+
+/// <summary>
+/// Frees the specified .
+/// </summary>
+/// <param name="">The .</param>
+/// <returns></returns>
+void RichED::Free(void * ptr) noexcept {
+    return std::free(ptr);
+}
+
+/// <summary>
+/// Res the alloc.
+/// </summary>
+/// <param name="ptr">The PTR.</param>
+/// <param name="len">The length.</param>
+/// <returns></returns>
+void* RichED::ReAlloc(void* ptr, size_t len) noexcept {
+    return std::realloc(ptr, len);
+}
+#endif

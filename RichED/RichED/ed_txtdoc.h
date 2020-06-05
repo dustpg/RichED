@@ -119,6 +119,8 @@ namespace RichED {
         bool LoadBinFile(CtxPtr) noexcept;
         // gen text
         void GenText(CtxPtr ctx, DocPoint begin, DocPoint end)noexcept;
+        // get estimated size in view space
+        auto GetEstimatedSize() const noexcept -> Size;
         // get logic line count 
         auto GetLogicLineCount() const noexcept { return m_vLogic.GetSize(); }
         // get selection
@@ -267,6 +269,8 @@ namespace RichED {
         Rect                    m_rcCaret;
         // document estimate size
         Size                    m_szEstimated;
+        // document estimate size - compare ver
+        Size                    m_szEstimatedCmp;
         // anchor pos
         DocPoint                m_dpAnchor;
         // caret pos
@@ -324,11 +328,13 @@ namespace RichED {
         Changed_Caret           = 1 << 2,
         // text changed            
         Changed_Text            = 1 << 3,
-        // estimated width  changed  [not impl yet]
+        // estimated width  changed
         Changed_EstimatedWidth  = 1 << 4,
-        // estimated height changed  [not impl yet]
+        // estimated height changed
         Changed_EstimatedHeight = 1 << 5,
-        // size changed
-        Changed_ViewportSize    = 1 << 6,
+        // viewport width changed
+        Changed_ViewportWidth   = 1 << 6,
+        // viewport height changed
+        Changed_ViewportHeight  = 1 << 7,
     };
 }
