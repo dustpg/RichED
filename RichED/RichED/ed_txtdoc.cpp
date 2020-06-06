@@ -580,6 +580,14 @@ auto RichED::CEDTextDocument::Update() noexcept -> ValuedChanged {
         Private::CheckEstimated(*this);
         m_szEstimatedCmp = m_szEstimated;
 #ifndef NDEBUG
+        if (m_bUpdateDbg) {
+            this->platform.DebugOutput(
+                "view update more than once before rendering, "
+                "may cause performance issues. "
+                "ignore this message if you don't known", true
+            );
+        }
+        m_bUpdateDbg = true;
         this->platform.DebugOutput("<BeforeRender>", false);
 #endif // !NDEBUG
     }
@@ -594,6 +602,9 @@ auto RichED::CEDTextDocument::Update() noexcept -> ValuedChanged {
 /// </summary>
 /// <returns></returns>
 void RichED::CEDTextDocument::Render(CtxPtr ctx) noexcept {
+#ifndef NDEBUG
+    m_bUpdateDbg = false;
+#endif
     const auto count = m_vVisual.GetSize();
     if (!count) return;
     // TODO: 固定行高
@@ -961,12 +972,8 @@ void RichED::CEDTextDocument::ResizeViewport(Size size) noexcept {
         m_rcViewport.width = size.width;
         m_rcViewport.height = size.height;
     }
-    // 没有变化
-    if (!flag) return;
-    // 清除视觉行
-    if (m_vVisual.IsOK()) m_vVisual.Resize(1, platform);
-    // 重绘
-    Private::ValueChanged(*this, Changed_View | flag);
+    // 标记修改
+    Private::ValueChanged(*this, flag);
 }
 
 /// <summary>
@@ -1631,6 +1638,15 @@ bool RichED::CEDTextDocument::GuiRedo() noexcept {
     return m_undo.Redo(*this);
 }
 
+
+/// <summary>
+/// GUIs the redo.
+/// </summary>
+/// <returns></returns>
+bool RichED::CEDTextDocument::GuiHasText() const noexcept {
+    return m_vLogic.GetSize() && m_vLogic[0].first->RefString().length;
+}
+
 // ----------------------------------------------------------------------------
 //                                Set RichText Format
 // ----------------------------------------------------------------------------
@@ -2012,8 +2028,9 @@ void RichED::CEDTextDocument::Private::ExpandVL(
     doc.m_szEstimated.width = est_width;
     // 估计高度
     const auto llen = doc.m_vLogic.GetSize();
-    const auto disl = line.lineno + 1;
+    const auto disl = line.lineno;
     const auto base = line.offset;
+    assert(disl && "bad display-line");
     doc.m_szEstimated.height = base * make_div(llen, disl);
 }
 

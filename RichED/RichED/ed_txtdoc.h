@@ -227,6 +227,8 @@ namespace RichED {
         bool GuiUndo() noexcept;
         // gui: redo
         bool GuiRedo() noexcept;
+        // gui: check if has text
+        bool GuiHasText() const noexcept;
     public: // GUI Operation - for Rich Text
         // set riched
         bool GuiRichED(const RichData& rd) noexcept {
@@ -287,8 +289,8 @@ namespace RichED {
         uint16_t                m_flagChanged = 0;
         // password UCS4 mode
         bool                    m_bPassword4 = false;
-        // password UCS4 mode
-        bool                    m_unused = false;
+        // debug bool value for update
+        bool                    m_bUpdateDbg = false;
         // head
         Node                    m_head;
         // tail
