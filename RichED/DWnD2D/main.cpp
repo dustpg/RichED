@@ -651,9 +651,21 @@ LRESULT WinDWnD2D::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
             gui_op = g_platform.Doc().GuiRuby(U'漢', u"かん"_red);
             break;
         case VK_F9:
-            dr = g_platform.Doc().GetSelectionRange();
-            if (dr.begin.line != dr.end.line || dr.begin.pos != dr.end.pos) {
-                msg_box_text(dr.begin, dr.end);
+            if (ctrl) {
+            }
+            else {
+                auto& doc = g_platform.Doc();
+                dr = doc.GetSelectionRange();
+                if (dr.begin.line != dr.end.line || dr.begin.pos != dr.end.pos) {
+                    msg_box_text(dr.begin, dr.end);
+                }
+                else {
+                    doc.BeginOp();
+                    doc.RemoveText({}, { g_platform.Doc().GetLogicLineCount() });
+                    doc.InsertText({}, u"Hello, World!"_red);
+                    //doc.SetAnchorCaret({}, {});
+                    doc.EndOp();
+                }
             }
             break;
         case VK_F11:
